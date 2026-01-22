@@ -168,7 +168,7 @@ function daemon.check_daemon_status()
 			if pid then
 				status.pid = pid
 				-- Check if process exists (works on Unix systems)
-				local result = vim.fn.system("kill -0 " .. pid .. " 2>/dev/null")
+				vim.fn.system("kill -0 " .. pid .. " 2>/dev/null")
 				status.daemon_running = vim.v.shell_error == 0
 			end
 		end
@@ -205,12 +205,22 @@ function daemon.stop_daemon()
 	end
 
 	-- Send TERM signal to daemon
-	local result = vim.fn.system("kill " .. pid .. " 2>/dev/null")
+	vim.fn.system("kill " .. pid .. " 2>/dev/null")
 	local success = vim.v.shell_error == 0
 
 	if success then
 		-- Reset channel
 		chan = nil
+
+		-- Wait for socket to be removed (daemon cleanup)
+		local socket_path = plugin_dir .. "/server/cursortab.sock"
+		for _ = 1, 50 do
+			vim.wait(100)
+			if vim.fn.filereadable(socket_path) == 0 then
+				break
+			end
+		end
+
 		return true, "Daemon stopped successfully"
 	else
 		return false, "Failed to stop daemon (process may not exist)"

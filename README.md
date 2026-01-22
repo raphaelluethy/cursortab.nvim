@@ -65,7 +65,7 @@ require("cursortab").setup({
   provider_url = "http://localhost:8000",  -- URL of the provider server
   provider_model = "autocomplete",         -- Model name
   provider_temperature = 0.0,              -- Sampling temperature
-  provider_max_tokens = 50,                -- Max tokens to generate
+  provider_max_tokens = 256,               -- Max tokens to generate
   provider_top_k = 50,                     -- Top-k sampling
 })
 ```
@@ -98,7 +98,7 @@ require("cursortab").setup({
   provider_url = "http://localhost:8000",
   provider_model = "autocomplete",
   provider_temperature = 0.0,
-  provider_max_tokens = 50,
+  provider_max_tokens = 256,
 })
 ```
 

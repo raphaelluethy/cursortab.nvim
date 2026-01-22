@@ -49,7 +49,7 @@ local default_config = {
 	provider_url = "http://localhost:8000", -- URL of the provider server
 	provider_model = "autocomplete", -- Model name (e.g., "autocomplete", "sweep-next-edit-1.5b", "zeta")
 	provider_temperature = 0.0, -- Sampling temperature
-	provider_max_tokens = 512, -- Max tokens to generate
+	provider_max_tokens = 256, -- Max tokens to generate
 	provider_top_k = 50, -- Top-k sampling (used by some providers)
 
 	-- Context Options

@@ -3,10 +3,10 @@ package logger
 import (
 	"bufio"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"sync"
+	"time"
 )
 
 // MaxLogLines defines the maximum number of lines to keep in the log file
@@ -57,7 +57,6 @@ func ParseLogLevel(s string) LogLevel {
 // LimitedLogger wraps the standard log.Logger with line count limiting and log levels
 type LimitedLogger struct {
 	file      *os.File
-	logger    *log.Logger
 	lineCount int
 	level     LogLevel
 	mutex     sync.Mutex
@@ -68,10 +67,8 @@ var globalLogger *LimitedLogger
 
 // NewLimitedLogger creates a new LimitedLogger
 func NewLimitedLogger(file *os.File, level LogLevel) *LimitedLogger {
-	logger := log.New(file, "", log.LstdFlags)
 	ll := &LimitedLogger{
 		file:      file,
-		logger:    logger,
 		lineCount: 0,
 		level:     level,
 	}
@@ -99,8 +96,9 @@ func (ll *LimitedLogger) logWithLevel(level LogLevel, format string, v ...any) {
 	if !ll.shouldLog(level) {
 		return
 	}
-	msg := fmt.Sprintf("[%s] %s", level.String(), fmt.Sprintf(format, v...))
-	ll.logger.Println(msg)
+	// Format with timestamp and write through Write() for proper line counting/rotation
+	msg := fmt.Sprintf("%s [%s] %s\n", time.Now().Format("2006/01/02 15:04:05"), level.String(), fmt.Sprintf(format, v...))
+	ll.Write([]byte(msg))
 }
 
 // Debug logs a debug message
