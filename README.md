@@ -203,6 +203,23 @@ To run tests:
 cd server && go test ./...
 ```
 
+### Internal Configuration Options
+
+Advanced configuration options for development and debugging:
+
+```lua
+require("cursortab").setup({
+  -- INTERNAL OPTIONS
+  log_level = "info",                 -- Log level: "debug", "info", "warn", "error"
+  event_debounce = 10,                -- Debounce in ms for events
+  debug_immediate_shutdown = false,   -- Shutdown daemon immediately when no clients are connected
+  debug_color = "#cccc55",            -- Foreground color for debug highlights (currently not used)
+})
+```
+
+These options are primarily for plugin development and debugging. Most users
+should not need to modify them.
+
 ## Contributing
 
 Contributions are welcome! Please open an issue or a pull request.
