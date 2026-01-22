@@ -251,27 +251,30 @@ func (p *Provider) parseUnifiedDiff(diff string) (original, updated string) {
 	var originalLines, updatedLines []string
 
 	for _, line := range lines {
-		if len(line) == 0 {
-			continue
-		}
-
 		// Skip diff headers
 		if strings.HasPrefix(line, "@@") || strings.HasPrefix(line, "---") || strings.HasPrefix(line, "+++") {
 			continue
 		}
 
+		// Handle empty lines - they represent unchanged empty lines in the diff
+		if len(line) == 0 {
+			originalLines = append(originalLines, "")
+			updatedLines = append(updatedLines, "")
+			continue
+		}
+
 		if strings.HasPrefix(line, "-") {
-			// Removed line - part of original
+			// Removed line - part of original only
 			originalLines = append(originalLines, line[1:])
 		} else if strings.HasPrefix(line, "+") {
-			// Added line - part of updated
+			// Added line - part of updated only
 			updatedLines = append(updatedLines, line[1:])
 		} else if strings.HasPrefix(line, " ") {
 			// Context line - part of both
 			originalLines = append(originalLines, line[1:])
 			updatedLines = append(updatedLines, line[1:])
 		} else {
-			// Line without prefix - treat as context
+			// Line without prefix - treat as context (shouldn't happen in valid diff)
 			originalLines = append(originalLines, line)
 			updatedLines = append(updatedLines, line)
 		}
@@ -287,15 +290,17 @@ func (p *Provider) getOriginalWindowContent(req *types.CompletionRequest, window
 	// Look for diff history for the current file
 	for _, fileHistory := range req.FileDiffHistories {
 		if fileHistory.FileName == req.FilePath && len(fileHistory.DiffHistory) > 0 {
-			// We have recent changes - for simplicity, use current content
-			// as "original" since the model will see the diffs separately.
-			// A more sophisticated approach would reverse-apply the last diff.
-			break
+			// We have recent changes - extract the "original" portion from the most recent diff
+			// to show what the code looked like before the last edit
+			lastDiff := fileHistory.DiffHistory[len(fileHistory.DiffHistory)-1]
+			original, _ := p.parseUnifiedDiff(lastDiff)
+			if original != "" {
+				return original
+			}
 		}
 	}
 
-	// Use the current window content as the original
-	// The diffs section shows what changed previously
+	// Use the current window content as the original (no recent changes)
 	windowLines := req.Lines[windowStart:windowEnd]
 	return strings.Join(windowLines, "\n")
 }
@@ -306,7 +311,8 @@ func (p *Provider) parseCompletion(req *types.CompletionRequest, completionText 
 	// Strip any trailing <|file_sep|> or </s> tokens that might have leaked
 	completionText = strings.TrimSuffix(completionText, "<|file_sep|>")
 	completionText = strings.TrimSuffix(completionText, "</s>")
-	completionText = strings.TrimRight(completionText, "\n")
+	// Trim leading/trailing whitespace for cleaner comparison
+	completionText = strings.TrimSpace(completionText)
 
 	// Calculate the window that was sent in the prompt
 	cursorLine := req.CursorRow - 1 // Convert to 0-indexed
@@ -315,7 +321,7 @@ func (p *Provider) parseCompletion(req *types.CompletionRequest, completionText 
 
 	// Get the original window content for comparison
 	oldLines := req.Lines[windowStart:windowEnd]
-	oldText := strings.Join(oldLines, "\n")
+	oldText := strings.TrimSpace(strings.Join(oldLines, "\n"))
 
 	// If the new text equals old text, no completion needed
 	if completionText == oldText {
@@ -326,8 +332,8 @@ func (p *Provider) parseCompletion(req *types.CompletionRequest, completionText 
 	newLines := strings.Split(completionText, "\n")
 
 	return &types.Completion{
-		StartLine:  windowStart + 1, // Convert back to 1-indexed
-		EndLineInc: windowEnd,       // Already 1-indexed exclusive -> inclusive
+		StartLine:  windowStart + 1,     // Convert back to 1-indexed
+		EndLineInc: windowEnd,           // windowEnd is 0-indexed exclusive = 1-indexed inclusive
 		Lines:      newLines,
 	}
 }
