@@ -83,6 +83,85 @@ type DiffResult struct {
 	CursorCol            int              // The optimal column (0-indexed) to position cursor, -1 if no positioning needed
 }
 
+// =============================================================================
+// DiffResult helper methods - SINGLE POINT for adding changes
+// All invariants are enforced here, making it impossible to add invalid changes.
+// =============================================================================
+
+// addChange is the SINGLE ENTRY POINT for adding changes to the result.
+// It enforces all invariants:
+//   - Identical content is not a change (silently rejected)
+//   - Line number must be positive
+//   - Collision handling: deletion + addition at same line = modification
+//
+// Returns true if the change was added, false if rejected.
+func (r *DiffResult) addChange(lineNum int, oldContent, newContent string, changeType DiffType, colStart, colEnd int) bool {
+	// INVARIANT 1: Identical content is not a change
+	if oldContent == newContent && changeType != LineDeletion {
+		return false
+	}
+
+	// INVARIANT 2: Line number must be positive
+	if lineNum <= 0 {
+		return false
+	}
+
+	// INVARIANT 3: Handle collisions
+	if existing, exists := r.Changes[lineNum]; exists {
+		// Deletion + Addition at same line = Modification
+		// Note: For deletions, the deleted content is stored in Content field
+		if existing.Type == LineDeletion && (changeType == LineAddition || changeType == LineAdditionGroup) {
+			deletedContent := existing.Content // Deletion stores content in Content field
+			changeType, colStart, colEnd = categorizeLineChangeWithColumns(deletedContent, newContent)
+			oldContent = deletedContent
+		} else {
+			// Other collisions: keep the existing change
+			return false
+		}
+	}
+
+	r.Changes[lineNum] = LineDiff{
+		Type:       changeType,
+		LineNumber: lineNum,
+		Content:    newContent,
+		OldContent: oldContent,
+		ColStart:   colStart,
+		ColEnd:     colEnd,
+	}
+	return true
+}
+
+// addDeletion adds a deletion change for the given line
+// Note: For deletions, the deleted content is stored in the Content field (not OldContent)
+func (r *DiffResult) addDeletion(lineNum int, content string) bool {
+	if lineNum <= 0 {
+		return false
+	}
+	// For deletions, we bypass addChange to store content correctly
+	// Deletions don't need identical-content check (deleting empty line is valid)
+	if _, exists := r.Changes[lineNum]; exists {
+		return false // Don't overwrite existing change
+	}
+	r.Changes[lineNum] = LineDiff{
+		Type:       LineDeletion,
+		LineNumber: lineNum,
+		Content:    content, // Deleted content goes in Content field
+	}
+	return true
+}
+
+// addAddition adds an addition change for the given line
+func (r *DiffResult) addAddition(lineNum int, content string) bool {
+	return r.addChange(lineNum, "", content, LineAddition, 0, 0)
+}
+
+// addModification adds a modification change, auto-categorizing the change type
+// based on the difference between oldContent and newContent
+func (r *DiffResult) addModification(lineNum int, oldContent, newContent string) bool {
+	changeType, colStart, colEnd := categorizeLineChangeWithColumns(oldContent, newContent)
+	return r.addChange(lineNum, oldContent, newContent, changeType, colStart, colEnd)
+}
+
 // analyzeDiff computes and categorizes line-level diffs between two texts
 func analyzeDiff(text1, text2 string) *DiffResult {
 	result := &DiffResult{
@@ -354,11 +433,7 @@ func processLineDiffs(lineDiffs []diffmatchpatch.Diff, result *DiffResult) {
 				// Pure deletion
 				for j, line := range lines {
 					lineNum := oldLineNum + j + 1
-					result.Changes[lineNum] = LineDiff{
-						Type:       LineDeletion,
-						LineNumber: lineNum,
-						Content:    line,
-					}
+					result.addDeletion(lineNum, line)
 				}
 				oldLineNum += len(lines)
 				i++
@@ -368,11 +443,7 @@ func processLineDiffs(lineDiffs []diffmatchpatch.Diff, result *DiffResult) {
 			// Pure addition (not preceded by delete)
 			for j, line := range lines {
 				lineNum := newLineNum + j + 1
-				result.Changes[lineNum] = LineDiff{
-					Type:       LineAddition,
-					LineNumber: lineNum,
-					Content:    line,
-				}
+				result.addAddition(lineNum, line)
 			}
 			newLineNum += len(lines)
 			i++
@@ -434,148 +505,75 @@ func findBestMatch(deletedLine string, insertedLines []string, usedInserts map[i
 }
 
 // handleModifications processes delete+insert pairs as modifications
+// Uses DiffResult helper methods which enforce all invariants automatically:
+//   - Identical lines are silently skipped
+//   - Collision handling (deletion + addition = modification) is automatic
 func handleModifications(deletedLines, insertedLines []string, oldLineStart, newLineStart int, result *DiffResult) {
 	// If we have equal number of lines, treat each pair as a modification
 	if len(deletedLines) == len(insertedLines) {
 		for j := range len(deletedLines) {
-			// Use old line numbers so modifications overlay the original content
 			lineNum := oldLineStart + j + 1
 
-			// Skip identical lines - they're not actually changes
-			if deletedLines[j] == insertedLines[j] {
-				continue
-			}
-
 			if deletedLines[j] != "" && insertedLines[j] != "" {
-				diffType, colStart, colEnd := categorizeLineChangeWithColumns(deletedLines[j], insertedLines[j])
-				result.Changes[lineNum] = LineDiff{
-					Type:       diffType,
-					LineNumber: lineNum,
-					Content:    insertedLines[j],
-					OldContent: deletedLines[j],
-					ColStart:   colStart,
-					ColEnd:     colEnd,
-				}
+				// Both non-empty: modification (addModification handles identical check)
+				result.addModification(lineNum, deletedLines[j], insertedLines[j])
 			} else if deletedLines[j] != "" {
-				// Deletion of non-empty line
-				result.Changes[lineNum] = LineDiff{
-					Type:       LineDeletion,
-					LineNumber: lineNum,
-					Content:    deletedLines[j],
-				}
+				// Only old has content: deletion
+				result.addDeletion(lineNum, deletedLines[j])
 			} else if insertedLines[j] != "" {
-				// Addition of non-empty line - use new line number
-				lineNum = newLineStart + j + 1
-				result.Changes[lineNum] = LineDiff{
-					Type:       LineAddition,
-					LineNumber: lineNum,
-					Content:    insertedLines[j],
-				}
-			} else {
-				// Both lines are empty - this is still a change
-				result.Changes[lineNum] = LineDiff{
-					Type:       LineModification,
-					LineNumber: lineNum,
-					Content:    insertedLines[j],
-					OldContent: deletedLines[j],
-				}
+				// Only new has content: addition (use new line number)
+				result.addAddition(newLineStart+j+1, insertedLines[j])
 			}
+			// Both empty and identical: addModification would reject anyway
 		}
-	} else {
-		// Unequal number of lines - use similarity-based matching
-		// Track which inserted lines have been matched
-		usedInserts := make(map[int]bool)
-		usedDeletes := make(map[int]bool)
+		return
+	}
 
-		// First pass: Match similar non-empty lines with similarity threshold
-		const similarityThreshold = 0.3 // Lines with >30% similarity are likely modifications
-		matches := make(map[int]int)    // maps deleted index to inserted index
+	// Unequal number of lines - use similarity-based matching
+	usedInserts := make(map[int]bool)
+	usedDeletes := make(map[int]bool)
 
-		for i, deletedLine := range deletedLines {
-			if deletedLine == "" {
-				continue
-			}
+	// First pass: Match similar non-empty lines with similarity threshold
+	const similarityThreshold = 0.3
+	matches := make(map[int]int) // maps deleted index to inserted index
 
-			bestIdx, bestSimilarity := findBestMatch(deletedLine, insertedLines, usedInserts)
-			if bestIdx != -1 && bestSimilarity >= similarityThreshold {
-				matches[i] = bestIdx
-				usedInserts[bestIdx] = true
-				usedDeletes[i] = true
-			}
+	for i, deletedLine := range deletedLines {
+		if deletedLine == "" {
+			continue
 		}
-
-		// Second pass: Process matched pairs as modifications
-		// Use OLD text coordinates for modifications so they overlay the original content
-		for delIdx, insIdx := range matches {
-			// Skip identical lines - they're not actually changes
-			if deletedLines[delIdx] == insertedLines[insIdx] {
-				continue
-			}
-
-			lineNum := oldLineStart + delIdx + 1
-			diffType, colStart, colEnd := categorizeLineChangeWithColumns(deletedLines[delIdx], insertedLines[insIdx])
-			result.Changes[lineNum] = LineDiff{
-				Type:       diffType,
-				LineNumber: lineNum,
-				Content:    insertedLines[insIdx],
-				OldContent: deletedLines[delIdx],
-				ColStart:   colStart,
-				ColEnd:     colEnd,
-			}
+		bestIdx, bestSimilarity := findBestMatch(deletedLine, insertedLines, usedInserts)
+		if bestIdx != -1 && bestSimilarity >= similarityThreshold {
+			matches[i] = bestIdx
+			usedInserts[bestIdx] = true
+			usedDeletes[i] = true
 		}
+	}
 
-		// Third pass: Handle unmatched deletions
-		// Use OLD line numbers since deletions refer to content being removed from original text
-		for i, deletedLine := range deletedLines {
-			if usedDeletes[i] {
-				continue
-			}
+	// Second pass: Process matched pairs as modifications
+	for delIdx, insIdx := range matches {
+		lineNum := oldLineStart + delIdx + 1
+		// addModification handles identical line check automatically
+		result.addModification(lineNum, deletedLines[delIdx], insertedLines[insIdx])
+	}
 
-			lineNum := oldLineStart + i + 1
-
-			// Only add if this line number isn't already used by a modification
-			if _, exists := result.Changes[lineNum]; !exists {
-				result.Changes[lineNum] = LineDiff{
-					Type:       LineDeletion,
-					LineNumber: lineNum,
-					Content:    deletedLine,
-				}
-			}
-			// If line is already used by a modification, the deletion is implicitly handled
+	// Third pass: Handle unmatched deletions
+	for i, deletedLine := range deletedLines {
+		if usedDeletes[i] {
+			continue
 		}
+		lineNum := oldLineStart + i + 1
+		// addDeletion handles collision check automatically
+		result.addDeletion(lineNum, deletedLine)
+	}
 
-		// Fourth pass: Handle unmatched additions
-		// Use NEW line numbers since additions refer to content in the new text
-		for i, insertedLine := range insertedLines {
-			if usedInserts[i] {
-				continue
-			}
-
-			lineNum := newLineStart + i + 1
-
-			// Check if this line number already has a deletion - if so, convert to modification
-			if existing, exists := result.Changes[lineNum]; exists {
-				if existing.Type == LineDeletion {
-					// Convert deletion + addition at same line to a modification
-					diffType, colStart, colEnd := categorizeLineChangeWithColumns(existing.Content, insertedLine)
-					result.Changes[lineNum] = LineDiff{
-						Type:       diffType,
-						LineNumber: lineNum,
-						Content:    insertedLine,
-						OldContent: existing.Content,
-						ColStart:   colStart,
-						ColEnd:     colEnd,
-					}
-				}
-				// If it's not a deletion, skip (already handled by modification)
-			} else {
-				result.Changes[lineNum] = LineDiff{
-					Type:       LineAddition,
-					LineNumber: lineNum,
-					Content:    insertedLine,
-				}
-			}
+	// Fourth pass: Handle unmatched additions
+	for i, insertedLine := range insertedLines {
+		if usedInserts[i] {
+			continue
 		}
+		lineNum := newLineStart + i + 1
+		// addAddition handles collision check automatically (deletion + addition = modification)
+		result.addAddition(lineNum, insertedLine)
 	}
 }
 
