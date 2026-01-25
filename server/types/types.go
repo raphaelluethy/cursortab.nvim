@@ -43,9 +43,10 @@ type VisualGroup struct {
 
 // StagedCompletion holds the queue of pending stages
 type StagedCompletion struct {
-	Stages     []*CompletionStage
-	CurrentIdx int
-	SourcePath string
+	Stages           []*CompletionStage
+	CurrentIdx       int
+	SourcePath       string
+	CumulativeOffset int // Tracks line count drift after each stage accept (for unequal line counts)
 }
 
 // CompletionRequest contains all the context needed for unified completion requests
@@ -64,6 +65,8 @@ type CompletionRequest struct {
 	// Cursor position
 	CursorRow int // 1-indexed
 	CursorCol int // 0-indexed
+	// Viewport constraint: only set when staging is disabled (0 = no limit)
+	ViewportHeight int
 	// Linter errors if LSP is active
 	LinterErrors *LinterErrors
 }

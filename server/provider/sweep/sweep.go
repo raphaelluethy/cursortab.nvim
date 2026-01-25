@@ -156,10 +156,17 @@ func (p *Provider) buildPrompt(req *types.CompletionRequest) (string, int, int, 
 
 	// Calculate max lines for streaming limit:
 	// - If trimming occurred, limit to window size (content beyond window lacks context)
-	// - If no trimming, no limit (model has full context, will stop at stop tokens)
+	// - If viewport height is provided, also limit to viewport (prevents overflow when staging disabled)
+	// - If neither, no limit (model has full context, will stop at stop tokens)
 	maxLines := 0
 	if didTrim {
 		maxLines = len(trimmedLines)
+	}
+	// Apply viewport constraint if provided (prevents overflow when cursor prediction is disabled)
+	if req.ViewportHeight > 0 {
+		if maxLines == 0 || req.ViewportHeight < maxLines {
+			maxLines = req.ViewportHeight
+		}
 	}
 
 	// 3. Get original content with same trim window

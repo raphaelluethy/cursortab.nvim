@@ -64,6 +64,7 @@ func (e *Engine) requestPrefetch(source types.CompletionSource, overrideRow int,
 	version := e.buffer.Version
 	filePath := e.buffer.Path
 	linterErrors := e.buffer.GetProviderLinterErrors(e.n)
+	viewportHeight := e.getViewportHeightConstraint()
 
 	go func() {
 		defer cancel()
@@ -79,6 +80,7 @@ func (e *Engine) requestPrefetch(source types.CompletionSource, overrideRow int,
 			FileDiffHistories: e.getAllFileDiffHistories(),
 			CursorRow:         overrideRow,
 			CursorCol:         overrideCol,
+			ViewportHeight:    viewportHeight,
 			LinterErrors:      linterErrors,
 		})
 

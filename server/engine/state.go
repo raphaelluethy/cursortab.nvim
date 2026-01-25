@@ -80,6 +80,7 @@ var transitions = []Transition{
 	{stateHasCursorTarget, EventEsc, (*Engine).doReject},
 	{stateHasCursorTarget, EventTextChanged, (*Engine).doRejectAndDebounce},
 	{stateHasCursorTarget, EventInsertLeave, (*Engine).doRejectAndStartIdleTimer},
+	{stateHasCursorTarget, EventCursorMovedNormal, (*Engine).doResetIdleTimer},
 }
 
 // transitionMap provides O(1) lookup for transitions by (state, event) pair

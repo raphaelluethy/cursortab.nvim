@@ -294,6 +294,9 @@ func (e *Engine) handleEvent(event Event) {
 	}
 
 	logger.Debug("handle event: %v (state=%s)", event.Type, e.state)
+	defer func() {
+		logger.Debug("after event: %v (state=%s)", event.Type, e.state)
+	}()
 
 	// Layer 1: Background/async results
 	if e.handleBackgroundEvent(event) {
@@ -392,6 +395,7 @@ func (e *Engine) requestCompletion(source types.CompletionSource) {
 			FileDiffHistories: e.getAllFileDiffHistories(),
 			CursorRow:         e.buffer.Row,
 			CursorCol:         e.buffer.Col,
+			ViewportHeight:    e.getViewportHeightConstraint(),
 			LinterErrors:      e.buffer.GetProviderLinterErrors(e.n),
 		})
 
@@ -518,10 +522,34 @@ func (e *Engine) acceptCompletion() {
 
 	// Handle staged completions: if there are more stages, show cursor target to next stage
 	if e.stagedCompletion != nil {
+		// Track cumulative offset for unequal line count stages
+		currentStage := e.stagedCompletion.Stages[e.stagedCompletion.CurrentIdx]
+		if currentStage.Completion != nil {
+			oldLineCount := currentStage.Completion.EndLineInc - currentStage.Completion.StartLine + 1
+			newLineCount := len(currentStage.Completion.Lines)
+			e.stagedCompletion.CumulativeOffset += newLineCount - oldLineCount
+		}
+
 		e.stagedCompletion.CurrentIdx++
 		if e.stagedCompletion.CurrentIdx < len(e.stagedCompletion.Stages) {
 			// More stages remaining - sync buffer and show cursor target to next stage
 			e.buffer.SyncIn(e.n, e.WorkspacePath)
+
+			// Apply cumulative offset to remaining stages if line counts changed
+			if e.stagedCompletion.CumulativeOffset != 0 {
+				for i := e.stagedCompletion.CurrentIdx; i < len(e.stagedCompletion.Stages); i++ {
+					stage := e.stagedCompletion.Stages[i]
+					if stage.Completion != nil {
+						stage.Completion.StartLine += e.stagedCompletion.CumulativeOffset
+						stage.Completion.EndLineInc += e.stagedCompletion.CumulativeOffset
+					}
+					if stage.CursorTarget != nil {
+						stage.CursorTarget.LineNumber += int32(e.stagedCompletion.CumulativeOffset)
+					}
+				}
+				// Reset cumulative offset after applying (already factored in)
+				e.stagedCompletion.CumulativeOffset = 0
+			}
 
 			// At n-1 stage (one stage remaining), trigger prefetch early so it has
 			// fresh context and time to complete before the last stage is accepted.
@@ -743,8 +771,8 @@ func (e *Engine) processCompletion(completion *types.Completion, cursorTarget *t
 		}
 	}
 
-	// Try staging if enabled and line counts are equal (coordinate mapping requirement)
-	if e.config.CursorPrediction.Enabled && len(originalLines) == len(completion.Lines) {
+	// Try staging if enabled (now supports unequal line counts via coordinate mapping)
+	if e.config.CursorPrediction.Enabled {
 		// Use unified CreateStages which handles:
 		// - Viewport partitioning (visible changes first)
 		// - Proximity grouping (nearby changes in same stage)
@@ -849,4 +877,14 @@ func (e *Engine) SetNvim(n *nvim.Nvim) {
 	}); err != nil {
 		logger.Error("error registering event handler for new connection: %v", err)
 	}
+}
+
+// getViewportHeightConstraint returns the viewport height constraint for completion requests.
+// When staging is enabled, returns 0 (no limit) to allow multi-line completions.
+// When staging is disabled, limits to viewport height to prevent overflow.
+func (e *Engine) getViewportHeightConstraint() int {
+	if e.config.CursorPrediction.Enabled {
+		return 0
+	}
+	return e.buffer.ViewportBottom - e.buffer.ViewportTop + 1
 }

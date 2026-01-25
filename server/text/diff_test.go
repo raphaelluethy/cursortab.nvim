@@ -1,17 +1,11 @@
 package text
 
 import (
+	"cursortab/assert"
+	"fmt"
 	"strings"
 	"testing"
 )
-
-// assertEqual compares two values and reports any differences
-func assertEqual(t *testing.T, expected, actual any, label string) {
-	t.Helper()
-	if expected != actual {
-		t.Errorf("Expected %v, got %v for %s", expected, actual, label)
-	}
-}
 
 // assertDiffResultEqual compares two DiffResult objects and reports any differences
 func assertDiffResultEqual(t *testing.T, expected, actual *DiffResult) {
@@ -20,55 +14,47 @@ func assertDiffResultEqual(t *testing.T, expected, actual *DiffResult) {
 	if expected == nil && actual == nil {
 		return
 	}
-	if expected == nil {
-		t.Fatalf("Expected nil DiffResult, got %+v", actual)
-	}
-	if actual == nil {
-		t.Fatalf("Expected DiffResult %+v, got nil", expected)
+	assert.NotNil(t, actual, "actual DiffResult")
+	assert.NotNil(t, expected, "expected DiffResult")
+	if expected == nil || actual == nil {
+		return
 	}
 
-	// Check that all expected changes are present
 	for lineNum, expectedChange := range expected.Changes {
 		actualChange, exists := actual.Changes[lineNum]
+		assert.True(t, exists, fmt.Sprintf("change at line %d exists", lineNum))
 		if !exists {
-			t.Errorf("Expected change at line %d but not found: %+v", lineNum, expectedChange)
 			continue
 		}
-
 		assertLineDiffEqual(t, expectedChange, actualChange)
 	}
 
-	// Check that no unexpected changes are present
-	for lineNum, actualChange := range actual.Changes {
-		if _, exists := expected.Changes[lineNum]; !exists {
-			t.Errorf("Unexpected change at line %d: %+v", lineNum, actualChange)
-		}
+	for lineNum := range actual.Changes {
+		_, exists := expected.Changes[lineNum]
+		assert.True(t, exists, fmt.Sprintf("no unexpected change at line %d", lineNum))
 	}
 
-	// Check IsOnlyDeletion flag
-	assertEqual(t, expected.IsOnlyLineDeletion, actual.IsOnlyLineDeletion, "IsOnlyLineDeletion")
-
-	// Check Last* properties
-	assertEqual(t, expected.LastDeletion, actual.LastDeletion, "LastDeletion")
-	assertEqual(t, expected.LastAddition, actual.LastAddition, "LastAddition")
-	assertEqual(t, expected.LastLineModification, actual.LastLineModification, "LastLineModification")
-	assertEqual(t, expected.LastAppendChars, actual.LastAppendChars, "LastAppendChars")
-	assertEqual(t, expected.LastDeleteChars, actual.LastDeleteChars, "LastDeleteChars")
-	assertEqual(t, expected.LastReplaceChars, actual.LastReplaceChars, "LastReplaceChars")
-	assertEqual(t, expected.CursorLine, actual.CursorLine, "CursorLine")
-	assertEqual(t, expected.CursorCol, actual.CursorCol, "CursorCol")
+	assert.Equal(t, expected.IsOnlyLineDeletion, actual.IsOnlyLineDeletion, "IsOnlyLineDeletion")
+	assert.Equal(t, expected.LastDeletion, actual.LastDeletion, "LastDeletion")
+	assert.Equal(t, expected.LastAddition, actual.LastAddition, "LastAddition")
+	assert.Equal(t, expected.LastLineModification, actual.LastLineModification, "LastLineModification")
+	assert.Equal(t, expected.LastAppendChars, actual.LastAppendChars, "LastAppendChars")
+	assert.Equal(t, expected.LastDeleteChars, actual.LastDeleteChars, "LastDeleteChars")
+	assert.Equal(t, expected.LastReplaceChars, actual.LastReplaceChars, "LastReplaceChars")
+	assert.Equal(t, expected.CursorLine, actual.CursorLine, "CursorLine")
+	assert.Equal(t, expected.CursorCol, actual.CursorCol, "CursorCol")
 }
 
 // assertLineDiffEqual compares two LineDiff objects
 func assertLineDiffEqual(t *testing.T, expected, actual LineDiff) {
 	t.Helper()
 
-	assertEqual(t, expected.Type, actual.Type, "Type")
-	assertEqual(t, expected.LineNumber, actual.LineNumber, "LineNumber")
-	assertEqual(t, expected.Content, actual.Content, "Content")
-	assertEqual(t, expected.OldContent, actual.OldContent, "OldContent")
-	assertEqual(t, expected.ColStart, actual.ColStart, "ColStart")
-	assertEqual(t, expected.ColEnd, actual.ColEnd, "ColEnd")
+	assert.Equal(t, expected.Type, actual.Type, "Type")
+	assert.Equal(t, expected.LineNumber, actual.LineNumber, "LineNumber")
+	assert.Equal(t, expected.Content, actual.Content, "Content")
+	assert.Equal(t, expected.OldContent, actual.OldContent, "OldContent")
+	assert.Equal(t, expected.ColStart, actual.ColStart, "ColStart")
+	assert.Equal(t, expected.ColEnd, actual.ColEnd, "ColEnd")
 }
 
 func TestLineDeletion(t *testing.T) {
@@ -676,15 +662,12 @@ func TestMixedChangesNoGrouping(t *testing.T) {
 
 	// Should NOT create groups because they're not consecutive (line 3 unchanged)
 	// Lines 2 and 4 are modifications but not consecutive
-	if len(actual.Changes) == 0 {
-		t.Error("Expected to detect changes")
-	}
+	assert.True(t, len(actual.Changes) > 0, "changes detected")
 
 	// Verify that no group types are present
 	for _, change := range actual.Changes {
-		if change.Type == LineModificationGroup || change.Type == LineAdditionGroup {
-			t.Errorf("Expected no grouping for non-consecutive changes, but found group type: %v", change.Type)
-		}
+		assert.False(t, change.Type == LineModificationGroup || change.Type == LineAdditionGroup,
+			"no grouping for non-consecutive changes")
 	}
 }
 
@@ -740,10 +723,7 @@ func TestLineChangeClassification(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			// Test single line change classification
 			diffType, _, _ := categorizeLineChangeWithColumns(test.oldLine, test.newLine)
-			if diffType != test.expected {
-				t.Errorf("Expected %v, got %v for change: %q -> %q",
-					test.expected, diffType, test.oldLine, test.newLine)
-			}
+			assert.Equal(t, test.expected, diffType, "change classification")
 		})
 	}
 }
@@ -758,19 +738,10 @@ func TestEmptyOldText(t *testing.T) {
 	actual := analyzeDiff(text1, text2)
 
 	// Should detect additions for all lines
-	if len(actual.Changes) == 0 {
-		t.Error("Expected changes when adding content to empty file")
-	}
+	assert.True(t, len(actual.Changes) > 0, "changes when adding content to empty file")
 
 	// Cursor should be positioned
-	if actual.CursorLine == -1 {
-		t.Error("Expected cursor positioning when adding to empty file")
-	}
-
-	t.Logf("Changes detected: %d", len(actual.Changes))
-	for lineNum, change := range actual.Changes {
-		t.Logf("  Line %d: %s", lineNum, change.Type.String())
-	}
+	assert.True(t, actual.CursorLine != -1, "cursor positioning when adding to empty file")
 }
 
 func TestEmptyNewText(t *testing.T) {
@@ -781,19 +752,13 @@ func TestEmptyNewText(t *testing.T) {
 	actual := analyzeDiff(text1, text2)
 
 	// Should detect deletions for all lines
-	if len(actual.Changes) == 0 {
-		t.Error("Expected changes when deleting all content")
-	}
+	assert.True(t, len(actual.Changes) > 0, "changes when deleting all content")
 
 	// Should be only deletions
-	if !actual.IsOnlyLineDeletion {
-		t.Error("Expected IsOnlyLineDeletion to be true")
-	}
+	assert.True(t, actual.IsOnlyLineDeletion, "IsOnlyLineDeletion")
 
 	// No cursor positioning for deletions
-	if actual.CursorLine != -1 {
-		t.Errorf("Expected no cursor positioning for deletions, got line %d", actual.CursorLine)
-	}
+	assert.Equal(t, -1, actual.CursorLine, "no cursor positioning for deletions")
 }
 
 func TestSingleLineFile(t *testing.T) {
@@ -836,16 +801,12 @@ func TestAdditionAtFirstLine(t *testing.T) {
 	actual := analyzeDiff(text1, text2)
 
 	// Should have an addition at line 1
-	if change, exists := actual.Changes[1]; !exists {
-		t.Error("Expected addition at line 1")
-	} else if change.Type != LineAddition {
-		t.Errorf("Expected addition type, got %s", change.Type.String())
-	}
+	change, exists := actual.Changes[1]
+	assert.True(t, exists, "addition at line 1 exists")
+	assert.Equal(t, LineAddition, change.Type, "addition type")
 
 	// Cursor should be positioned at the addition
-	if actual.CursorLine != 1 {
-		t.Errorf("Expected cursor at line 1, got %d", actual.CursorLine)
-	}
+	assert.Equal(t, 1, actual.CursorLine, "cursor at line 1")
 }
 
 func TestMultipleAdditionsAtBeginning(t *testing.T) {
@@ -855,25 +816,11 @@ func TestMultipleAdditionsAtBeginning(t *testing.T) {
 
 	actual := analyzeDiff(text1, text2)
 
-	// Should group consecutive additions
-	t.Logf("Changes detected: %d", len(actual.Changes))
-	for lineNum, change := range actual.Changes {
-		t.Logf("  Line %d: %s - %q", lineNum, change.Type.String(), change.Content)
-		if change.Type == LineAdditionGroup {
-			t.Logf("    GroupLines: %v", change.GroupLines)
-			t.Logf("    StartLine: %d, EndLine: %d", change.StartLine, change.EndLine)
-		}
-	}
-
 	// Should have additions (either grouped or individual)
-	if len(actual.Changes) == 0 {
-		t.Error("Expected changes for additions at beginning")
-	}
+	assert.True(t, len(actual.Changes) > 0, "changes for additions at beginning")
 
 	// Cursor should be positioned
-	if actual.CursorLine == -1 {
-		t.Error("Expected cursor positioning for additions")
-	}
+	assert.True(t, actual.CursorLine != -1, "cursor positioning for additions")
 }
 
 func TestModificationAtFirstLine(t *testing.T) {
@@ -884,16 +831,11 @@ func TestModificationAtFirstLine(t *testing.T) {
 	actual := analyzeDiff(text1, text2)
 
 	// Should have a modification at line 1
-	if change, exists := actual.Changes[1]; !exists {
-		t.Error("Expected change at line 1")
-	} else {
-		t.Logf("Line 1 change type: %s", change.Type.String())
-	}
+	_, exists := actual.Changes[1]
+	assert.True(t, exists, "change at line 1")
 
 	// Cursor should be positioned at line 1
-	if actual.CursorLine != 1 {
-		t.Errorf("Expected cursor at line 1, got %d", actual.CursorLine)
-	}
+	assert.Equal(t, 1, actual.CursorLine, "cursor at line 1")
 }
 
 func TestAdditionAtEndOfFile(t *testing.T) {
@@ -905,12 +847,6 @@ func TestAdditionAtEndOfFile(t *testing.T) {
 
 	actual := analyzeDiff(text1, text2)
 
-	// Should have additions at lines 3 and 4 (possibly grouped)
-	t.Logf("Changes detected: %d", len(actual.Changes))
-	for lineNum, change := range actual.Changes {
-		t.Logf("  Line %d: %s - content: %q", lineNum, change.Type.String(), change.Content)
-	}
-
 	// Verify we have additions
 	hasAddition := false
 	for _, change := range actual.Changes {
@@ -919,15 +855,10 @@ func TestAdditionAtEndOfFile(t *testing.T) {
 			break
 		}
 	}
-	if !hasAddition {
-		t.Error("Expected at least one addition")
-	}
+	assert.True(t, hasAddition, "at least one addition")
 
 	// Cursor should be positioned at some change
-	if actual.CursorLine == -1 {
-		t.Error("Expected cursor positioning for additions")
-	}
-	t.Logf("Cursor position: line=%d, col=%d", actual.CursorLine, actual.CursorCol)
+	assert.True(t, actual.CursorLine != -1, "cursor positioning for additions")
 }
 
 func TestDeletionAtFirstLine(t *testing.T) {
@@ -938,16 +869,12 @@ func TestDeletionAtFirstLine(t *testing.T) {
 	actual := analyzeDiff(text1, text2)
 
 	// Should have a deletion at line 1
-	if change, exists := actual.Changes[1]; !exists {
-		t.Error("Expected deletion at line 1")
-	} else if change.Type != LineDeletion {
-		t.Errorf("Expected deletion type, got %s", change.Type.String())
-	}
+	change, exists := actual.Changes[1]
+	assert.True(t, exists, "deletion at line 1 exists")
+	assert.Equal(t, LineDeletion, change.Type, "deletion type")
 
 	// Should be only deletion
-	if !actual.IsOnlyLineDeletion {
-		t.Error("Expected IsOnlyLineDeletion to be true")
-	}
+	assert.True(t, actual.IsOnlyLineDeletion, "IsOnlyLineDeletion")
 }
 
 func TestDeletionAtLastLine(t *testing.T) {
@@ -958,16 +885,12 @@ func TestDeletionAtLastLine(t *testing.T) {
 	actual := analyzeDiff(text1, text2)
 
 	// Should have a deletion at line 3
-	if change, exists := actual.Changes[3]; !exists {
-		t.Error("Expected deletion at line 3")
-	} else if change.Type != LineDeletion {
-		t.Errorf("Expected deletion type, got %s", change.Type.String())
-	}
+	change, exists := actual.Changes[3]
+	assert.True(t, exists, "deletion at line 3 exists")
+	assert.Equal(t, LineDeletion, change.Type, "deletion type")
 
 	// LastDeletion should be 3
-	if actual.LastDeletion != 3 {
-		t.Errorf("Expected LastDeletion=3, got %d", actual.LastDeletion)
-	}
+	assert.Equal(t, 3, actual.LastDeletion, "LastDeletion")
 }
 
 func TestCursorPositionBeyondBuffer(t *testing.T) {
@@ -980,19 +903,13 @@ func TestCursorPositionBeyondBuffer(t *testing.T) {
 	newLines := strings.Split(text2, "\n")
 
 	// Cursor line should be within the new text bounds
-	if actual.CursorLine > len(newLines) {
-		t.Errorf("Cursor line %d exceeds new text line count %d", actual.CursorLine, len(newLines))
-	}
+	assert.True(t, actual.CursorLine <= len(newLines), "cursor line within bounds")
 
 	// Cursor col should be within the line bounds
 	if actual.CursorLine > 0 && actual.CursorLine <= len(newLines) {
 		lineContent := newLines[actual.CursorLine-1]
-		if actual.CursorCol > len(lineContent) {
-			t.Errorf("Cursor col %d exceeds line length %d", actual.CursorCol, len(lineContent))
-		}
+		assert.True(t, actual.CursorCol <= len(lineContent), "cursor col within line bounds")
 	}
-
-	t.Logf("Cursor position: line=%d, col=%d", actual.CursorLine, actual.CursorCol)
 }
 
 func TestIdenticalLineMarkedAsModification(t *testing.T) {
@@ -1027,18 +944,14 @@ if __name__ == "__main__":
 
 	// Check that line 11 is NOT in changes (it's identical in both)
 	if change, exists := actual.Changes[11]; exists {
-		if change.Content == change.OldContent {
-			t.Errorf("BUG: Line 11 is marked as %s but content == oldContent (both are %q)",
-				change.Type.String(), change.Content)
-		}
+		assert.False(t, change.Content == change.OldContent,
+			"line 11 should not be marked as change when content == oldContent")
 	}
 
 	// Line 12 should be an addition
-	if change, exists := actual.Changes[12]; !exists {
-		t.Error("Expected line 12 to be an addition")
-	} else if change.Type != LineAddition {
-		t.Errorf("Expected line 12 to be addition, got %s", change.Type.String())
-	}
+	change, exists := actual.Changes[12]
+	assert.True(t, exists, "line 12 exists")
+	assert.Equal(t, LineAddition, change.Type, "line 12 is addition")
 }
 
 func TestIfCompletionBug(t *testing.T) {
@@ -1071,18 +984,10 @@ if __name__ == "__main__":
 
 	// Line 9 ("if " -> "if __name__ == "__main__":") should be append_chars, not deletion
 	change9, exists := actual.Changes[9]
-	if !exists {
-		t.Fatal("Expected a change at line 9 (the 'if ' line)")
-	}
-	if change9.Type == LineDeletion {
-		t.Error("Line 9 should not be categorized as deletion")
-	}
-	if change9.Type != LineAppendChars {
-		t.Errorf("Expected append_chars, got %s", change9.Type.String())
-	}
-	if change9.OldContent != "if " {
-		t.Errorf("Expected oldContent='if ', got %q", change9.OldContent)
-	}
+	assert.True(t, exists, "change at line 9 exists")
+	assert.False(t, change9.Type == LineDeletion, "line 9 not categorized as deletion")
+	assert.Equal(t, LineAppendChars, change9.Type, "line 9 is append_chars")
+	assert.Equal(t, "if ", change9.OldContent, "oldContent")
 }
 
 func TestSingleLineToMultipleLinesWithSpacesReproduceBug(t *testing.T) {
@@ -1104,52 +1009,301 @@ test()
 	// The user reports only seeing modification of "def test" line and addition of print line
 	// but not seeing the rest (empty lines and test() call)
 
-	t.Logf("Detected changes:")
-	for lineNum, change := range actual.Changes {
-		t.Logf("  Line %d: %s - Content: %q", lineNum, change.Type.String(), change.Content)
-		if change.Type == LineAdditionGroup || change.Type == LineModificationGroup {
-			t.Logf("    Group lines: %v", change.GroupLines)
-			t.Logf("    Start: %d, End: %d", change.StartLine, change.EndLine)
-		}
-	}
-
-	// The bug might be in the grouping logic or how empty lines are handled
-	// Check if all lines are properly detected
-	_ = []string{
-		"def test():",
-		`    print("test")`,
-		"", // empty line
-		"test()",
-		"", // empty line
-		"", // empty line
-		"", // empty line
-	}
-
-	// Count non-empty lines that should be changes
-	expectedNonEmptyChanges := 3 // "def test()", print line, "test()"
-	actualNonEmptyChanges := 0
-	for _, change := range actual.Changes {
-		if change.Type == LineAdditionGroup {
-			for _, line := range change.GroupLines {
-				if line != "" {
-					actualNonEmptyChanges++
-				}
-			}
-		} else if change.Content != "" {
-			actualNonEmptyChanges++
-		}
-	}
-
-	t.Logf("Expected non-empty changes: %d, Actual: %d", expectedNonEmptyChanges, actualNonEmptyChanges)
-
-	// Check if the issue is in line counting
-	newLines := strings.Split(newText, "\n")
-	t.Logf("New text has %d lines: %v", len(newLines), newLines)
-
 	// The algorithm should detect at least 2 changes: one append_chars and one addition_group
 	// The addition_group should contain all the new lines including empty ones
-	if len(actual.Changes) < 2 {
-		t.Errorf("Bug confirmed: Only detected %d changes but expected at least 2", len(actual.Changes))
-	}
+	assert.True(t, len(actual.Changes) >= 2, "at least 2 changes detected")
+}
 
+// =============================================================================
+// Tests for unequal line count scenarios (insertions/deletions)
+// =============================================================================
+
+func TestLineMapping_EqualLineCounts(t *testing.T) {
+	// When line counts are equal, mapping should be 1:1 for unchanged lines
+	text1 := "line 1\nline 2\nline 3"
+	text2 := "line 1\nmodified\nline 3"
+
+	actual := analyzeDiff(text1, text2)
+
+	assert.NotNil(t, actual.LineMapping, "LineMapping")
+	assert.Equal(t, 3, actual.OldLineCount, "OldLineCount")
+	assert.Equal(t, 3, actual.NewLineCount, "NewLineCount")
+
+	// Line 1 and 3 are unchanged, should map 1:1
+	assert.Equal(t, 1, actual.LineMapping.NewToOld[0], "new line 1 maps to old line 1")
+	assert.Equal(t, 3, actual.LineMapping.NewToOld[2], "new line 3 maps to old line 3")
+	// Line 2 is modified, should still map 1:1
+	assert.Equal(t, 2, actual.LineMapping.NewToOld[1], "new line 2 maps to old line 2")
+}
+
+func TestLineMapping_PureInsertion(t *testing.T) {
+	// Adding lines increases new line count
+	text1 := "line 1\nline 3"
+	text2 := "line 1\nline 2\nline 3"
+
+	actual := analyzeDiff(text1, text2)
+
+	assert.Equal(t, 2, actual.OldLineCount, "OldLineCount")
+	assert.Equal(t, 3, actual.NewLineCount, "NewLineCount")
+
+	// Verify line mapping
+	assert.NotNil(t, actual.LineMapping, "LineMapping")
+
+	// New line 1 -> old line 1
+	assert.Equal(t, 1, actual.LineMapping.NewToOld[0], "new line 1 maps to old line 1")
+	// New line 2 is inserted, should have no old mapping
+	assert.Equal(t, -1, actual.LineMapping.NewToOld[1], "new line 2 (inserted) maps to -1")
+	// New line 3 -> old line 2
+	assert.Equal(t, 2, actual.LineMapping.NewToOld[2], "new line 3 maps to old line 2")
+
+	// Verify the change has correct coordinates
+	change, exists := actual.Changes[2]
+	assert.True(t, exists, "change at line 2 exists")
+	assert.Equal(t, LineAddition, change.Type, "change type")
+	assert.Equal(t, 2, change.NewLineNum, "NewLineNum")
+}
+
+func TestLineMapping_PureDeletion(t *testing.T) {
+	// Removing lines decreases new line count
+	text1 := "line 1\nline 2\nline 3"
+	text2 := "line 1\nline 3"
+
+	actual := analyzeDiff(text1, text2)
+
+	assert.Equal(t, 3, actual.OldLineCount, "OldLineCount")
+	assert.Equal(t, 2, actual.NewLineCount, "NewLineCount")
+
+	// Verify the deleted line has correct coordinates
+	change, exists := actual.Changes[2]
+	assert.True(t, exists, "change at line 2 (deletion) exists")
+	assert.Equal(t, LineDeletion, change.Type, "change type")
+	assert.Equal(t, 2, change.OldLineNum, "OldLineNum")
+
+	// Old line 2 should have no new mapping
+	assert.Equal(t, -1, actual.LineMapping.OldToNew[1], "old line 2 (deleted) maps to -1")
+}
+
+func TestLineMapping_MultipleInsertions(t *testing.T) {
+	// Adding multiple lines at once
+	text1 := "start\nend"
+	text2 := "start\nnew 1\nnew 2\nnew 3\nend"
+
+	actual := analyzeDiff(text1, text2)
+
+	assert.Equal(t, 2, actual.OldLineCount, "OldLineCount")
+	assert.Equal(t, 5, actual.NewLineCount, "NewLineCount")
+
+	// Verify insertions are detected
+	additionCount := 0
+	for _, change := range actual.Changes {
+		if change.Type == LineAddition {
+			additionCount++
+			// Inserted lines should have NewLineNum set but OldLineNum as anchor
+			assert.True(t, change.NewLineNum > 0, "positive NewLineNum for insertion")
+		}
+	}
+	assert.Equal(t, 3, additionCount, "addition count")
+}
+
+func TestLineMapping_MultipleDeletions(t *testing.T) {
+	// Removing multiple lines at once
+	text1 := "start\ndel 1\ndel 2\ndel 3\nend"
+	text2 := "start\nend"
+
+	actual := analyzeDiff(text1, text2)
+
+	assert.Equal(t, 5, actual.OldLineCount, "OldLineCount")
+	assert.Equal(t, 2, actual.NewLineCount, "NewLineCount")
+
+	// Verify deletions are detected
+	deletionCount := 0
+	for _, change := range actual.Changes {
+		if change.Type == LineDeletion {
+			deletionCount++
+			assert.True(t, change.OldLineNum > 0, "positive OldLineNum for deletion")
+		}
+	}
+	assert.Equal(t, 3, deletionCount, "deletion count")
+}
+
+func TestLineMapping_MixedInsertionDeletion(t *testing.T) {
+	// Mix of insertions and deletions resulting in net line change
+	text1 := "line 1\nold line 2\nline 3"
+	text2 := "line 1\nnew line 2a\nnew line 2b\nline 3"
+
+	actual := analyzeDiff(text1, text2)
+
+	assert.Equal(t, 3, actual.OldLineCount, "OldLineCount")
+	assert.Equal(t, 4, actual.NewLineCount, "NewLineCount")
+
+	// Should have changes for the modified/added lines
+	assert.True(t, len(actual.Changes) > 0, "changes detected")
+}
+
+func TestLineMapping_NetLineIncrease(t *testing.T) {
+	// Scenario where completion adds more lines than original
+	text1 := `func hello() {
+}`
+	text2 := `func hello() {
+    fmt.Println("Hello")
+    fmt.Println("World")
+}`
+
+	actual := analyzeDiff(text1, text2)
+
+	assert.Equal(t, 2, actual.OldLineCount, "OldLineCount")
+	assert.Equal(t, 4, actual.NewLineCount, "NewLineCount")
+
+	// Line 1 unchanged, lines 2-3 inserted, line 4 matches old line 2
+	// Verify unchanged lines map correctly
+	assert.Equal(t, 1, actual.LineMapping.NewToOld[0], "new line 1 maps to old line 1")
+}
+
+func TestLineMapping_NetLineDecrease(t *testing.T) {
+	// Scenario where completion removes lines
+	text1 := `func hello() {
+    fmt.Println("Hello")
+    fmt.Println("World")
+    fmt.Println("!")
+}`
+	text2 := `func hello() {
+    fmt.Println("Hello World!")
+}`
+
+	actual := analyzeDiff(text1, text2)
+
+	assert.Equal(t, 5, actual.OldLineCount, "OldLineCount")
+	assert.Equal(t, 3, actual.NewLineCount, "NewLineCount")
+
+	// Verify we detect the changes
+	assert.True(t, len(actual.Changes) > 0, "changes detected")
+}
+
+func TestLineDiffCoordinates_Modification(t *testing.T) {
+	// Verify that modifications have both OldLineNum and NewLineNum set
+	text1 := "Hello world"
+	text2 := "Hello there"
+
+	actual := analyzeDiff(text1, text2)
+
+	change, exists := actual.Changes[1]
+	assert.True(t, exists, "change at line 1 exists")
+	assert.Equal(t, 1, change.OldLineNum, "OldLineNum")
+	assert.Equal(t, 1, change.NewLineNum, "NewLineNum")
+}
+
+func TestLineDiffCoordinates_Addition(t *testing.T) {
+	// Verify that additions have NewLineNum set and OldLineNum as anchor
+	text1 := "line 1\nline 3"
+	text2 := "line 1\nline 2\nline 3"
+
+	actual := analyzeDiff(text1, text2)
+
+	change, exists := actual.Changes[2]
+	assert.True(t, exists, "change at line 2 exists")
+	assert.Equal(t, LineAddition, change.Type, "change type")
+	assert.Equal(t, 2, change.NewLineNum, "NewLineNum")
+	// OldLineNum should be -1 or an anchor point (line before insertion)
+	// For pure insertions, this is the anchor
+}
+
+func TestLineDiffCoordinates_Deletion(t *testing.T) {
+	// Verify that deletions have OldLineNum set
+	text1 := "line 1\nline 2\nline 3"
+	text2 := "line 1\nline 3"
+
+	actual := analyzeDiff(text1, text2)
+
+	change, exists := actual.Changes[2]
+	assert.True(t, exists, "change at line 2 exists")
+	assert.Equal(t, LineDeletion, change.Type, "change type")
+	assert.Equal(t, 2, change.OldLineNum, "OldLineNum")
+}
+
+// =============================================================================
+// Edge case tests for coordinate handling
+// =============================================================================
+
+func TestDeletionAtLine1(t *testing.T) {
+	// Edge case: deletion at the very first line (no preceding line for anchor)
+	text1 := "first line\nsecond line\nthird line"
+	text2 := "second line\nthird line"
+
+	actual := analyzeDiff(text1, text2)
+
+	assert.Equal(t, 3, actual.OldLineCount, "OldLineCount")
+	assert.Equal(t, 2, actual.NewLineCount, "NewLineCount")
+
+	// Should have a deletion at old line 1
+	change, exists := actual.Changes[1]
+	assert.True(t, exists, "deletion at line 1 exists")
+	assert.Equal(t, LineDeletion, change.Type, "change type")
+	assert.Equal(t, 1, change.OldLineNum, "OldLineNum")
+	// NewLineNum should be -1 or anchor (no line before to anchor to)
+	assert.True(t, change.NewLineNum <= 0, "no valid new line anchor for first line deletion")
+
+	// Old line 1 should map to nothing
+	assert.Equal(t, -1, actual.LineMapping.OldToNew[0], "old line 1 deleted")
+	// Old line 2 should map to new line 1
+	assert.Equal(t, 1, actual.LineMapping.OldToNew[1], "old line 2 maps to new line 1")
+}
+
+func TestMultipleConsecutiveInsertionsThenDeletions(t *testing.T) {
+	// Edge case: multiple consecutive insertions followed by deletions
+	text1 := "line A\nline B\nline C\nline D\nline E"
+	text2 := "line A\nnew 1\nnew 2\nline C\nline E"
+
+	actual := analyzeDiff(text1, text2)
+
+	assert.Equal(t, 5, actual.OldLineCount, "OldLineCount")
+	assert.Equal(t, 5, actual.NewLineCount, "NewLineCount")
+
+	// Should detect changes - B deleted, new lines added, D deleted
+	assert.True(t, len(actual.Changes) > 0, "changes detected")
+
+	// Verify mapping is consistent
+	assert.NotNil(t, actual.LineMapping, "LineMapping exists")
+	assert.Equal(t, 5, len(actual.LineMapping.NewToOld), "NewToOld length")
+	assert.Equal(t, 5, len(actual.LineMapping.OldToNew), "OldToNew length")
+}
+
+func TestInsertionAtLine1(t *testing.T) {
+	// Edge case: insertion at the very first line
+	text1 := "existing line"
+	text2 := "new first line\nexisting line"
+
+	actual := analyzeDiff(text1, text2)
+
+	assert.Equal(t, 1, actual.OldLineCount, "OldLineCount")
+	assert.Equal(t, 2, actual.NewLineCount, "NewLineCount")
+
+	// New line 1 is an insertion (no old line maps to it)
+	assert.Equal(t, -1, actual.LineMapping.NewToOld[0], "new line 1 is insertion")
+	// New line 2 maps to old line 1
+	assert.Equal(t, 1, actual.LineMapping.NewToOld[1], "new line 2 maps to old line 1")
+}
+
+func TestLargeLineCountDrift(t *testing.T) {
+	// Edge case: large difference in line counts
+	text1 := "line 1\nline 2"
+	text2 := "line 1\nnew a\nnew b\nnew c\nnew d\nnew e\nline 2"
+
+	actual := analyzeDiff(text1, text2)
+
+	assert.Equal(t, 2, actual.OldLineCount, "OldLineCount")
+	assert.Equal(t, 7, actual.NewLineCount, "NewLineCount")
+
+	// All inserted lines should have NewLineNum set
+	insertionCount := 0
+	for _, change := range actual.Changes {
+		if change.Type == LineAddition {
+			insertionCount++
+			assert.True(t, change.NewLineNum > 0, "insertion has valid NewLineNum")
+		}
+	}
+	assert.Equal(t, 5, insertionCount, "5 insertions detected")
+
+	// Verify line 1 and line 2 still map correctly
+	assert.Equal(t, 1, actual.LineMapping.NewToOld[0], "new line 1 maps to old line 1")
+	assert.Equal(t, 2, actual.LineMapping.NewToOld[6], "new line 7 maps to old line 2")
 }
