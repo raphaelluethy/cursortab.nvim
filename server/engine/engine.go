@@ -771,65 +771,42 @@ func (e *Engine) processCompletion(completion *types.Completion, cursorTarget *t
 		}
 	}
 
-	// Try staging if enabled (now supports unequal line counts via coordinate mapping)
-	if e.config.CursorPrediction.Enabled {
-		// Use unified CreateStages which handles:
-		// - Viewport partitioning (visible changes first)
-		// - Proximity grouping (nearby changes in same stage)
-		// - Cursor distance sorting (closest stage first)
-		stages := text.CreateStages(
-			diffResult,
-			e.buffer.Row,
-			e.buffer.ViewportTop, e.buffer.ViewportBottom,
-			completion.StartLine,
-			e.config.CursorPrediction.DistThreshold,
-			e.buffer.Path,
-			completion.Lines,
-		)
+	// Try staging - CreateStages handles all viewport/distance logic and returns:
+	// - nil: no staging needed (single visible+close cluster or no changes)
+	// - StagingResult with FirstNeedsNavigation: whether to show cursor prediction UI
+	stagingResult := text.CreateStages(
+		diffResult,
+		e.buffer.Row,
+		e.buffer.ViewportTop, e.buffer.ViewportBottom,
+		completion.StartLine,
+		e.config.CursorPrediction.DistThreshold,
+		e.buffer.Path,
+		completion.Lines,
+	)
 
-		if len(stages) > 0 {
-			e.stagedCompletion = &types.StagedCompletion{
-				Stages:     stages,
-				CurrentIdx: 0,
-				SourcePath: e.buffer.Path,
+	if stagingResult != nil && len(stagingResult.Stages) > 0 {
+		e.stagedCompletion = &types.StagedCompletion{
+			Stages:     stagingResult.Stages,
+			CurrentIdx: 0,
+			SourcePath: e.buffer.Path,
+		}
+
+		if stagingResult.FirstNeedsNavigation {
+			// First stage is outside viewport or far from cursor - show cursor prediction
+			firstStage := stagingResult.Stages[0]
+			e.cursorTarget = &types.CursorPredictionTarget{
+				RelativePath:    e.buffer.Path,
+				LineNumber:      int32(firstStage.Completion.StartLine),
+				ShouldRetrigger: false,
 			}
-
-			// Check if first stage is outside viewport - show cursor prediction instead
-			firstStage := stages[0]
-			bufferStartLine := firstStage.Completion.StartLine
-			bufferEndLine := firstStage.Completion.EndLineInc
-
-			allOutsideViewport := (e.buffer.ViewportTop > 0 && e.buffer.ViewportBottom > 0) &&
-				(bufferEndLine < e.buffer.ViewportTop || bufferStartLine > e.buffer.ViewportBottom)
-
-			// Calculate distance from cursor to first stage
-			var distance int
-			if e.buffer.Row < bufferStartLine {
-				distance = bufferStartLine - e.buffer.Row
-			} else if e.buffer.Row > bufferEndLine {
-				distance = e.buffer.Row - bufferEndLine
-			} else {
-				distance = 0 // Cursor is within the stage range
-			}
-
-			isFarFromCursor := distance > e.config.CursorPrediction.DistThreshold
-
-			if allOutsideViewport || isFarFromCursor {
-				// Show cursor prediction to first change
-				e.cursorTarget = &types.CursorPredictionTarget{
-					RelativePath:    e.buffer.Path,
-					LineNumber:      int32(bufferStartLine),
-					ShouldRetrigger: false,
-				}
-				e.state = stateHasCursorTarget
-				e.buffer.OnCursorPredictionReady(e.n, bufferStartLine)
-				return true
-			}
-
-			// Show first stage
-			e.showCurrentStage()
+			e.state = stateHasCursorTarget
+			e.buffer.OnCursorPredictionReady(e.n, firstStage.Completion.StartLine)
 			return true
 		}
+
+		// Show first stage directly
+		e.showCurrentStage()
+		return true
 	}
 
 	// No staging - show as single completion
@@ -881,10 +858,16 @@ func (e *Engine) SetNvim(n *nvim.Nvim) {
 
 // getViewportHeightConstraint returns the viewport height constraint for completion requests.
 // When staging is enabled, returns 0 (no limit) to allow multi-line completions.
-// When staging is disabled, limits to viewport height to prevent overflow.
+// When staging is disabled, limits to distance from cursor to viewport bottom to prevent overflow.
 func (e *Engine) getViewportHeightConstraint() int {
 	if e.config.CursorPrediction.Enabled {
 		return 0
 	}
-	return e.buffer.ViewportBottom - e.buffer.ViewportTop + 1
+	// Distance from cursor to end of viewport
+	if e.buffer.ViewportBottom > 0 && e.buffer.Row > 0 {
+		if constraint := e.buffer.ViewportBottom - e.buffer.Row; constraint > 0 {
+			return constraint
+		}
+	}
+	return 0
 }

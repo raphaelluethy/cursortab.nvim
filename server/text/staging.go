@@ -6,9 +6,16 @@ import (
 	"strings"
 )
 
+// StagingResult contains the result of CreateStages, including whether the first
+// stage requires navigation UI (cursor prediction) before display.
+type StagingResult struct {
+	Stages               []*types.CompletionStage
+	FirstNeedsNavigation bool
+}
+
 // CreateStages is the main entry point for creating stages from a diff result.
 // It handles viewport partitioning, proximity grouping, and cursor distance sorting.
-// Returns nil if no staging is needed (single stage or no changes).
+// Returns nil if no staging is needed (single visible+close cluster or no changes).
 //
 // Parameters:
 //   - diff: The diff result (can be grouped or ungrouped - this function handles both)
@@ -19,7 +26,7 @@ import (
 //   - filePath: File path for cursor targets
 //   - newLines: New content lines for extracting stage content
 //
-// Returns stages sorted by cursor distance, or nil if ≤1 stage needed.
+// Returns StagingResult with stages sorted by cursor distance, or nil if no staging needed.
 func CreateStages(
 	diff *DiffResult,
 	cursorRow int,
@@ -28,7 +35,7 @@ func CreateStages(
 	proximityThreshold int,
 	filePath string,
 	newLines []string,
-) []*types.CompletionStage {
+) *StagingResult {
 	if len(diff.Changes) == 0 {
 		return nil
 	}
@@ -68,9 +75,21 @@ func CreateStages(
 	// Combine: in-view first, then out-of-view
 	allClusters := append(inViewClusters, outViewClusters...)
 
-	// If only 1 cluster (or none), no staging needed
-	if len(allClusters) <= 1 {
+	// If no clusters, no staging needed
+	if len(allClusters) == 0 {
 		return nil
+	}
+
+	// If only 1 cluster, check if it needs staging (out of viewport or far from cursor)
+	if len(allClusters) == 1 {
+		cluster := allClusters[0]
+		inViewport := clusterIsInViewport(cluster, viewportTop, viewportBottom, baseLineOffset, diff)
+		distance := clusterDistanceFromCursor(cluster, cursorRow, baseLineOffset, diff)
+
+		if inViewport && distance <= proximityThreshold {
+			return nil // Single visible, close cluster - no staging needed
+		}
+		// Fall through to build single stage (needs navigation)
 	}
 
 	// Step 3: Sort clusters by cursor distance
@@ -84,7 +103,18 @@ func CreateStages(
 	})
 
 	// Step 4: Create stages from clusters
-	return buildStagesFromClusters(allClusters, newLines, filePath, baseLineOffset, diff)
+	stages := buildStagesFromClusters(allClusters, newLines, filePath, baseLineOffset, diff)
+
+	// Step 5: Check if first stage needs navigation UI
+	firstNeedsNav := clusterNeedsNavigation(
+		allClusters[0], cursorRow, viewportTop, viewportBottom,
+		baseLineOffset, diff, proximityThreshold,
+	)
+
+	return &StagingResult{
+		Stages:               stages,
+		FirstNeedsNavigation: firstNeedsNav,
+	}
 }
 
 // getBufferLineForChange calculates the buffer line for a change using the appropriate coordinate.
@@ -181,6 +211,35 @@ type ChangeCluster struct {
 	Changes   map[int]LineDiff // Map of line number to diff operation
 }
 
+// clusterIsInViewport checks if a cluster is entirely within the viewport.
+// Returns true if no viewport info (viewportTop == 0 && viewportBottom == 0) as a fallback.
+func clusterIsInViewport(cluster *ChangeCluster, viewportTop, viewportBottom, baseLineOffset int, diff *DiffResult) bool {
+	if viewportTop == 0 && viewportBottom == 0 {
+		return true // No viewport info = assume visible
+	}
+	startLine, endLine := getClusterBufferRange(cluster, baseLineOffset, diff)
+	return startLine >= viewportTop && endLine <= viewportBottom
+}
+
+// clusterNeedsNavigation determines if a cluster requires cursor prediction UI.
+// Returns true if the cluster is entirely outside the viewport OR far from cursor.
+// This matches the engine's logic for deciding when to show navigation UI vs inline completion.
+func clusterNeedsNavigation(cluster *ChangeCluster, cursorRow, viewportTop, viewportBottom, baseLineOffset int, diff *DiffResult, distThreshold int) bool {
+	bufferStart, bufferEnd := getClusterBufferRange(cluster, baseLineOffset, diff)
+
+	// Entirely outside viewport = needs navigation
+	if viewportTop > 0 && viewportBottom > 0 {
+		entirelyOutside := bufferEnd < viewportTop || bufferStart > viewportBottom
+		if entirelyOutside {
+			return true
+		}
+	}
+
+	// Far from cursor = needs navigation
+	distance := clusterDistanceFromCursor(cluster, cursorRow, baseLineOffset, diff)
+	return distance > distThreshold
+}
+
 // clusterDistanceFromCursor calculates the minimum distance from cursor to a cluster,
 // using the coordinate mapping for accurate buffer positions.
 func clusterDistanceFromCursor(cluster *ChangeCluster, cursorRow int, baseLineOffset int, diff *DiffResult) int {
@@ -201,23 +260,76 @@ func clusterDistanceFromCursor(cluster *ChangeCluster, cursorRow int, baseLineOf
 func getClusterBufferRange(cluster *ChangeCluster, baseLineOffset int, diff *DiffResult) (int, int) {
 	minOldLine := -1
 	maxOldLine := -1
+	minOldLineFromNonAdditions := -1 // Track min from modifications/deletions only
+	hasAdditions := false
+	hasNonAdditions := false
+	maxNewLineNum := 0
 
 	for lineNum, change := range cluster.Changes {
 		bufferLine := getBufferLineForChange(change, lineNum, baseLineOffset, diff.LineMapping)
 
-		if minOldLine == -1 || bufferLine < minOldLine {
-			minOldLine = bufferLine
-		}
-		if bufferLine > maxOldLine {
-			maxOldLine = bufferLine
+		isAddition := change.Type == LineAddition || change.Type == LineAdditionGroup
+
+		if isAddition {
+			hasAdditions = true
+			if change.NewLineNum > maxNewLineNum {
+				maxNewLineNum = change.NewLineNum
+			}
+			// For additions, only update minOldLine (anchor position), NOT maxOldLine.
+			// Additions don't extend the buffer range - they insert at an anchor point.
+			// Only use bufferLine if it comes from a valid source (OldLineNum or mapping),
+			// not from the fallback (mapKey in NEW coordinates).
+			hasValidAnchor := change.OldLineNum > 0 ||
+				(diff.LineMapping != nil && change.NewLineNum > 0)
+			if hasValidAnchor {
+				if minOldLine == -1 || bufferLine < minOldLine {
+					minOldLine = bufferLine
+				}
+			}
+		} else {
+			hasNonAdditions = true
+			// Track min/max from non-additions (they have valid buffer coordinates)
+			if minOldLineFromNonAdditions == -1 || bufferLine < minOldLineFromNonAdditions {
+				minOldLineFromNonAdditions = bufferLine
+			}
+			if minOldLine == -1 || bufferLine < minOldLine {
+				minOldLine = bufferLine
+			}
+			if bufferLine > maxOldLine {
+				maxOldLine = bufferLine
+			}
 		}
 
-		// For group types, also consider EndLine
-		if change.Type == LineModificationGroup || change.Type == LineAdditionGroup {
+		// For modification groups, EndLine is in OLD/buffer coordinates
+		if change.Type == LineModificationGroup {
 			endBufferLine := change.EndLine + baseLineOffset - 1
 			if endBufferLine > maxOldLine {
 				maxOldLine = endBufferLine
 			}
+		}
+		// Track the end of addition groups (in NEW coordinates, for content extraction)
+		if change.Type == LineAdditionGroup && change.EndLine > maxNewLineNum {
+			maxNewLineNum = change.EndLine
+		}
+	}
+
+	// When there are both additions and non-additions (modifications/deletions),
+	// use the min from non-additions for startLine. This prevents addition anchors
+	// (which point to the line BEFORE insertion) from incorrectly pulling down
+	// the buffer start line.
+	if hasAdditions && hasNonAdditions && minOldLineFromNonAdditions > 0 {
+		minOldLine = minOldLineFromNonAdditions
+	}
+
+	// For clusters with additions that extend beyond the original buffer,
+	// extend maxOldLine to cover the full affected range in the original buffer.
+	// This ensures the stage's EndLineInc properly covers what needs to be replaced.
+	if hasAdditions && diff.OldLineCount > 0 {
+		lastOldLineInRange := baseLineOffset + diff.OldLineCount - 1
+		// If additions extend beyond the original buffer and maxOldLine is less than
+		// the last line of the original buffer, extend to cover the full range
+		if maxNewLineNum > diff.OldLineCount && maxOldLine < lastOldLineInRange {
+			maxOldLine = lastOldLineInRange
 		}
 	}
 
@@ -226,7 +338,13 @@ func getClusterBufferRange(cluster *ChangeCluster, baseLineOffset int, diff *Dif
 		minOldLine = cluster.StartLine + baseLineOffset - 1
 	}
 	if maxOldLine == -1 {
-		maxOldLine = cluster.EndLine + baseLineOffset - 1
+		// For pure addition clusters, maxOldLine should equal minOldLine (anchor point).
+		// Don't use cluster.EndLine which is in NEW coordinates.
+		if hasAdditions && !hasNonAdditions {
+			maxOldLine = minOldLine
+		} else {
+			maxOldLine = cluster.EndLine + baseLineOffset - 1
+		}
 	}
 
 	return minOldLine, maxOldLine

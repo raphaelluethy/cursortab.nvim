@@ -67,6 +67,7 @@ var transitions = []Transition{
 	{statePendingCompletion, EventTextChanged, (*Engine).doTextChangePending},
 	{statePendingCompletion, EventEsc, (*Engine).doReject},
 	{statePendingCompletion, EventInsertLeave, (*Engine).doRejectAndStartIdleTimer},
+	{statePendingCompletion, EventCursorMovedNormal, (*Engine).doResetIdleTimer},
 
 	// From stateHasCompletion
 	{stateHasCompletion, EventTab, (*Engine).doAcceptCompletion},
