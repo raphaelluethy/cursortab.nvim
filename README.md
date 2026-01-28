@@ -121,28 +121,6 @@ require("cursortab").setup({
 })
 ```
 
-#### Zeta Provider
-
-Local model support with OpenAI-compatible API format.
-
-**Features:**
-
-- End-of-line completion
-- Local model execution
-- OpenAI-compatible API
-
-**Example Configuration:**
-
-```lua
-require("cursortab").setup({
-  provider = {
-    type = "zeta",
-    url = "http://localhost:8000",
-    model = "zeta",
-  },
-})
-```
-
 #### Sweep Provider
 
 Sweep Next-Edit 1.5B model for fast, accurate next-edit predictions.
@@ -151,10 +129,7 @@ Sweep Next-Edit 1.5B model for fast, accurate next-edit predictions.
 
 - Multi-line completions with token-based context (sends full file for small
   files, trimmed around cursor for large files)
-- Fast inference (~500ms on CPU, <100ms on GPU)
 - Outperforms larger models on next-edit accuracy
-- Open-source weights available
-- OpenAI-compatible API format
 
 **Requirements:**
 
@@ -183,6 +158,43 @@ llama-server -hf sweepai/sweep-next-edit-1.5b-GGUF --port 8000
 
 # Or with a local GGUF file
 llama-server -m sweep-next-edit-1.5b.q8_0.v2.gguf --port 8000
+```
+
+#### Zeta Provider
+
+Zed's Zeta model - a Qwen2.5-Coder-7B fine-tuned for edit prediction using DPO
+and SFT.
+
+**Features:**
+
+- Multi-line completions with cursor jump predictions
+- 8B parameter model optimized for code edits
+
+**Requirements:**
+
+- vLLM or compatible inference server
+- Zeta model downloaded from
+  [Hugging Face](https://huggingface.co/zed-industries/zeta)
+
+**Example Configuration:**
+
+```lua
+require("cursortab").setup({
+  provider = {
+    type = "zeta",
+    url = "http://localhost:8000",
+    model = "zeta",
+  },
+})
+```
+
+**Setup Instructions:**
+
+```bash
+# Basic deployment with vLLM
+vllm serve zed-industries/zeta --served-model-name zeta --port 8000
+
+# See the HuggingFace page for optimized deployment options
 ```
 
 ## Usage
@@ -243,7 +255,8 @@ For the best experience, use **Sweep** with the `sweep-next-edit-1.5b` model.
 <summary>Why are completions slow?</summary>
 
 1. Use a smaller or more quantized model (e.g., Q4 instead of Q8)
-2. Decrease `provider.max_tokens` to reduce output length (also limits input context)
+2. Decrease `provider.max_tokens` to reduce output length (also limits input
+   context)
 
 </details>
 
@@ -251,8 +264,10 @@ For the best experience, use **Sweep** with the `sweep-next-edit-1.5b` model.
 <summary>Why are completions not working?</summary>
 
 1. Update to the latest version and restart the daemon with `:CursortabRestart`
-2. Increase `provider.completion_timeout` (default: 5000ms) to 10000 or more if your model is slow
-3. Increase `provider.max_tokens` to give the model more surrounding context (tradeoff: slower completions)
+2. Increase `provider.completion_timeout` (default: 5000ms) to 10000 or more if
+   your model is slow
+3. Increase `provider.max_tokens` to give the model more surrounding context
+   (tradeoff: slower completions)
 
 </details>
 
