@@ -47,6 +47,7 @@ Currently supports custom models and models form Zeta (Zed) and SweepAI.
 ```lua
 {
   "leonardcser/cursortab.nvim",
+  -- version = "*",  -- Use latest tagged version for more stability
   build = "cd server && go build",
   config = function()
     require("cursortab").setup()
@@ -59,6 +60,7 @@ Currently supports custom models and models form Zeta (Zed) and SweepAI.
 ```lua
 use {
   "leonardcser/cursortab.nvim",
+  -- tag = "*",  -- Use latest tagged version for more stability
   run = "cd server && go build",
   config = function()
     require("cursortab").setup()
