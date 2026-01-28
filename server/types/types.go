@@ -108,6 +108,7 @@ type ProviderType string
 
 const (
 	ProviderTypeInline ProviderType = "inline"
+	ProviderTypeFIM    ProviderType = "fim"
 	ProviderTypeSweep  ProviderType = "sweep"
 	ProviderTypeZeta   ProviderType = "zeta"
 )

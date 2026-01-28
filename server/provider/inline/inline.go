@@ -1,58 +1,22 @@
 package inline
 
 import (
-	"bytes"
 	"context"
+	"cursortab/client/openai"
 	"cursortab/logger"
 	"cursortab/types"
 	"cursortab/utils"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 )
 
 // Provider implements the engine.Provider interface for inline completion
 type Provider struct {
 	config      *types.ProviderConfig
-	httpClient  *http.Client
-	url         string
+	client      *openai.Client
 	model       string
 	temperature float64
 	maxTokens   int
-	topK        int
-}
-
-// completionRequest matches the OpenAI Completion API format used by serve.py
-type completionRequest struct {
-	Model       string   `json:"model"`
-	Prompt      string   `json:"prompt"`
-	Temperature float64  `json:"temperature"`
-	MaxTokens   int      `json:"max_tokens"`
-	TopK        int      `json:"top_k"`
-	Stop        []string `json:"stop,omitempty"`
-	N           int      `json:"n"`
-	Echo        bool     `json:"echo"`
-}
-
-// completionResponse matches the OpenAI Completion API response format
-type completionResponse struct {
-	ID      string `json:"id"`
-	Object  string `json:"object"`
-	Created int64  `json:"created"`
-	Model   string `json:"model"`
-	Choices []struct {
-		Index        int    `json:"index"`
-		Text         string `json:"text"`
-		Logprobs     any    `json:"logprobs"`
-		FinishReason string `json:"finish_reason"`
-	} `json:"choices"`
-	Usage struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-		TotalTokens      int `json:"total_tokens"`
-	} `json:"usage"`
 }
 
 // NewProvider creates a new inline provider instance
@@ -63,12 +27,10 @@ func NewProvider(config *types.ProviderConfig) (*Provider, error) {
 
 	return &Provider{
 		config:      config,
-		httpClient:  &http.Client{},
-		url:         config.ProviderURL,
+		client:      openai.NewClient(config.ProviderURL),
 		model:       config.ProviderModel,
 		temperature: config.ProviderTemperature,
 		maxTokens:   config.ProviderMaxTokens,
-		topK:        config.ProviderTopK,
 	}, nil
 }
 
@@ -91,64 +53,36 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 	prompt := p.buildPrompt(req)
 
 	// Create the completion request
-	completionReq := completionRequest{
+	completionReq := &openai.CompletionRequest{
 		Model:       p.model,
 		Prompt:      prompt,
 		Temperature: p.temperature,
 		MaxTokens:   p.maxTokens,
-		TopK:        p.topK,
 		Stop:        []string{"\n"}, // Stop at newline for end-of-line completion
 		N:           1,
 		Echo:        false,
 	}
 
 	// Debug logging for request
-	logger.Debug("inline provider request to %s:\n  Model: %s\n  Temperature: %.2f\n  MaxTokens: %d\n  TopK: %d\n  Prompt length: %d chars\n  Prompt:\n%s",
-		p.url+"/v1/completions",
+	logger.Debug("inline provider request to %s:\n  Model: %s\n  Temperature: %.2f\n  MaxTokens: %d\n  Prompt length: %d chars\n  Prompt:\n%s",
+		p.client.URL+"/v1/completions",
 		completionReq.Model,
 		completionReq.Temperature,
 		completionReq.MaxTokens,
-		completionReq.TopK,
 		len(prompt),
 		prompt)
 
-	// Marshal the request
-	reqBody, err := json.Marshal(completionReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	// Create HTTP request
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.url+"/v1/completions", bytes.NewReader(reqBody))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
 	// Send the request
-	resp, err := p.httpClient.Do(httpReq)
+	completionResp, err := p.client.DoCompletion(ctx, completionReq)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Check status code
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(body))
-	}
-
-	// Parse the response
-	var completionResp completionResponse
-	if err := json.NewDecoder(resp.Body).Decode(&completionResp); err != nil {
-		return nil, fmt.Errorf("failed to decode response: %w", err)
+		return nil, err
 	}
 
 	// Check if we got any completions
 	if len(completionResp.Choices) == 0 {
 		return &types.CompletionResponse{
 			Completions:  []*types.Completion{},
-			CursorTarget: nil, // No cursor predictions for end-of-line completion
+			CursorTarget: nil,
 		}, nil
 	}
 
@@ -203,7 +137,7 @@ func (p *Provider) GetCompletion(ctx context.Context, req *types.CompletionReque
 
 	return &types.CompletionResponse{
 		Completions:  []*types.Completion{completion},
-		CursorTarget: nil, // No cursor predictions - this is key difference from cursor provider
+		CursorTarget: nil,
 	}, nil
 }
 

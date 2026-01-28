@@ -1,7 +1,7 @@
 # cursortab.nvim
 
-A Neovim plugin that provides edit completions and cursor predictions. Currently
-supports custom models and models form Zeta (Zed) and SweepAI.
+A Neovim plugin that provides local edit completions and cursor predictions.
+Currently supports custom models and models form Zeta (Zed) and SweepAI.
 
 > [!WARNING]
 >
@@ -11,6 +11,34 @@ supports custom models and models form Zeta (Zed) and SweepAI.
 <p align="center">
     <img src="assets/demo.gif" width="600">
 </p>
+
+<!-- mtoc-start -->
+
+* [Requirements](#requirements)
+* [Installation](#installation)
+  * [Using lazy.nvim](#using-lazynvim)
+  * [Using packer.nvim](#using-packernvim)
+* [Configuration](#configuration)
+  * [Providers](#providers)
+    * [Inline Provider (Default)](#inline-provider-default)
+    * [FIM Provider](#fim-provider)
+    * [Sweep Provider](#sweep-provider)
+    * [Zeta Provider](#zeta-provider)
+* [Usage](#usage)
+  * [Commands](#commands)
+* [Development](#development)
+  * [Build](#build)
+  * [Test](#test)
+* [FAQ](#faq)
+* [Contributing](#contributing)
+* [License](#license)
+
+<!-- mtoc-end -->
+
+## Requirements
+
+- Go 1.24.2+ (for building the server component)
+- Neovim 0.8+ (for the plugin)
 
 ## Installation
 
@@ -72,7 +100,7 @@ require("cursortab").setup({
   },
 
   provider = {
-    type = "inline",                   -- Provider: "inline", "sweep", or "zeta"
+    type = "inline",                   -- Provider: "inline", "fim", "sweep", or "zeta"
     url = "http://localhost:8000",     -- URL of the provider server
     model = "inline",                  -- Model name
     temperature = 0.0,                 -- Sampling temperature
@@ -92,18 +120,19 @@ For detailed configuration documentation, see `:help cursortab-config`.
 
 ### Providers
 
-The plugin supports three AI provider backends: Inline, Sweep, and Zeta.
+The plugin supports four AI provider backends: Inline, FIM, Sweep, and Zeta.
+
+| Provider | Multi-line | Multi-edit | Cursor Prediction | Model             |
+| -------- | :--------: | :--------: | :---------------: | ----------------- |
+| Inline   |            |            |                   | Any base model    |
+| FIM      |     ✓      |            |                   | Any FIM-capable   |
+| Sweep    |     ✓      |     ✓      |         ✓         | `sweep-next-edit` |
+| Zeta     |     ✓      |     ✓      |         ✓         | `zeta`            |
 
 #### Inline Provider (Default)
 
-End-of-line completion using OpenAI-compatible API endpoints.
-
-**Features:**
-
-- End-of-line completion only
-- No cursor jump predictions
-- Stop at newline characters
-- Works with any OpenAI-compatible `/v1/completions` endpoint
+End-of-line completion using OpenAI-compatible API endpoints. Works with any
+OpenAI-compatible `/v1/completions` endpoint.
 
 **Requirements:**
 
@@ -116,20 +145,59 @@ require("cursortab").setup({
   provider = {
     type = "inline",
     url = "http://localhost:8000",
-    model = "inline",
   },
 })
 ```
 
+**Example Setup:**
+
+```bash
+# Using llama.cpp
+llama-server -hf ggml-org/Qwen2.5-Coder-1.5B-Q8_0-GGUF --port 8000
+```
+
+#### FIM Provider
+
+Fill-in-the-Middle completion using standard FIM tokens. Uses both prefix
+(before cursor) and suffix (after cursor) context. Compatible with Qwen,
+DeepSeek-Coder, and similar models. Works with any OpenAI-compatible
+`/v1/completions` endpoint.
+
+**Requirements:**
+
+- An OpenAI-compatible completions endpoint with a FIM-capable model
+
+**Example Configuration:**
+
+```lua
+require("cursortab").setup({
+  provider = {
+    type = "fim",
+    url = "http://localhost:8000",
+  },
+})
+```
+
+**Example Setup:**
+
+```bash
+# Using llama.cpp with Qwen2.5-Coder 1.5B
+llama-server -hf ggml-org/Qwen2.5-Coder-1.5B-Q8_0-GGUF --port 8000
+
+# Or with Qwen 2.5 Coder 14B + 0.5B draft for speculative decoding
+llama-server \
+    -hf ggml-org/Qwen2.5-Coder-14B-Q8_0-GGUF:q8_0 \
+    -hfd ggml-org/Qwen2.5-Coder-0.5B-Q8_0-GGUF:q8_0 \
+    --port 8012 \
+    -b 1024 \
+    -ub 1024 \
+    --cache-reuse 256
+```
+
 #### Sweep Provider
 
-Sweep Next-Edit 1.5B model for fast, accurate next-edit predictions.
-
-**Features:**
-
-- Multi-line completions with token-based context (sends full file for small
-  files, trimmed around cursor for large files)
-- Outperforms larger models on next-edit accuracy
+Sweep Next-Edit 1.5B model for fast, accurate next-edit predictions. Sends full
+file for small files, trimmed around cursor for large files.
 
 **Requirements:**
 
@@ -144,16 +212,14 @@ require("cursortab").setup({
   provider = {
     type = "sweep",
     url = "http://localhost:8000",
-    model = "sweep-next-edit-1.5b",
   },
 })
 ```
 
-**Setup Instructions:**
+**Example Setup:**
 
 ```bash
-# Using llama.cpp (recommended)
-# Download the GGUF model and run llama-server
+# Using llama.cpp
 llama-server -hf sweepai/sweep-next-edit-1.5b-GGUF --port 8000
 
 # Or with a local GGUF file
@@ -164,11 +230,6 @@ llama-server -m sweep-next-edit-1.5b.q8_0.v2.gguf --port 8000
 
 Zed's Zeta model - a Qwen2.5-Coder-7B fine-tuned for edit prediction using DPO
 and SFT.
-
-**Features:**
-
-- Multi-line completions with cursor jump predictions
-- 8B parameter model optimized for code edits
 
 **Requirements:**
 
@@ -188,10 +249,10 @@ require("cursortab").setup({
 })
 ```
 
-**Setup Instructions:**
+**Example Setup:**
 
 ```bash
-# Basic deployment with vLLM
+# Using vLLM
 vllm serve zed-industries/zeta --served-model-name zeta --port 8000
 
 # See the HuggingFace page for optimized deployment options
@@ -213,11 +274,6 @@ vllm serve zed-industries/zeta --served-model-name zeta --port 8000
 - `:CursortabStatus`: Show detailed status information about the plugin and
   daemon
 - `:CursortabRestart`: Restart the cursortab daemon process
-
-## Requirements
-
-- Go 1.24.2+ (for building the server component)
-- Neovim 0.8+ (for the plugin)
 
 ## Development
 
@@ -242,12 +298,8 @@ cd server && go test ./...
 <details>
 <summary>Which provider should I use?</summary>
 
-- **Inline**: End-of-line completions only. No multi-line or cursor prediction
-  support.
-- **Zeta** and **Sweep**: Both support multi-line completions and cursor
-  predictions. Sweep generally produces better results.
-
-For the best experience, use **Sweep** with the `sweep-next-edit-1.5b` model.
+See the [provider feature comparison table](#providers) for capabilities. For
+the best experience, use **Sweep** with the `sweep-next-edit-1.5b` model.
 
 </details>
 
