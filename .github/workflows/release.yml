@@ -38,11 +38,43 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Generate release notes
+        id: notes
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -z "$PREV_TAG" ]; then
+            RANGE="HEAD"
+          else
+            RANGE="${PREV_TAG}..HEAD"
+          fi
+
+          print_section() {
+            local title="$1"
+            local pattern="$2"
+            local commits=$(git log --pretty=format:"%h %s" $RANGE | grep -E "^[a-f0-9]+ ${pattern}" | sed 's/^/- /' || true)
+            if [ -n "$commits" ]; then
+              echo "## $title"
+              echo "$commits"
+              echo ""
+            fi
+          }
+
+          {
+            echo 'body<<EOF'
+            print_section "Breaking Changes" "[a-z]+(\(.+\))?!:"
+            print_section "Features" "feat(\(.+\))?:"
+            print_section "Bug Fixes" "fix(\(.+\))?:"
+            print_section "Refactor" "refactor(\(.+\))?:"
+            print_section "Documentation" "docs(\(.+\))?:"
+            print_section "Other Changes" "(perf|chore|test|ci)(\(.+\))?:"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           draft: false
           prerelease: ${{ contains(github.ref_name, 'beta') || contains(github.ref_name, 'alpha') }}
-          generate_release_notes: true
+          body: ${{ steps.notes.outputs.body }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
