@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -48,6 +49,95 @@ type Provider interface {
 	GetCompletion(ctx context.Context, req *types.CompletionRequest) (*types.CompletionResponse, error)
 }
 
+// LineStreamProvider extends Provider with line-by-line streaming capabilities.
+// For providers like sweep, zeta, fim that stream by lines.
+type LineStreamProvider interface {
+	Provider
+	// GetStreamingType returns: 0=none, 1=lines, 2=tokens
+	GetStreamingType() int
+	// PrepareLineStream prepares the stream and returns it along with provider context
+	PrepareLineStream(ctx context.Context, req *types.CompletionRequest) (LineStream, any, error)
+	// ValidateFirstLine validates the first line (called after first line received)
+	ValidateFirstLine(providerCtx any, firstLine string) error
+	// FinishLineStream runs postprocessors on the final accumulated result
+	FinishLineStream(providerCtx any, text string, finishReason string, stoppedEarly bool) (*types.CompletionResponse, error)
+}
+
+// TokenStreamProvider extends Provider with token-by-token streaming capabilities.
+// For providers like inline that stream individual tokens for ghost text.
+type TokenStreamProvider interface {
+	Provider
+	// GetStreamingType returns: 0=none, 1=lines, 2=tokens
+	GetStreamingType() int
+	// PrepareTokenStream prepares the stream and returns it along with provider context.
+	// The stream emits cumulative text (not deltas) for idempotent UI updates.
+	PrepareTokenStream(ctx context.Context, req *types.CompletionRequest) (LineStream, any, error)
+	// FinishTokenStream runs postprocessors on the final accumulated result
+	FinishTokenStream(providerCtx any, text string) (*types.CompletionResponse, error)
+}
+
+// Streaming type constants
+const (
+	StreamingTypeNone   = 0 // Batch mode
+	StreamingTypeLines  = 1 // Line-by-line (sweep, zeta, fim)
+	StreamingTypeTokens = 2 // Token-by-token (inline)
+)
+
+// LineStream provides incremental line-by-line streaming
+type LineStream interface {
+	LinesChan() <-chan string // Channel for complete lines
+	Cancel()                  // Cancel the stream early
+}
+
+// TrimmedContext provides access to trim info from the provider.
+// Implemented by provider.Context to allow engine to extract window offset.
+type TrimmedContext interface {
+	GetWindowStart() int      // 0-indexed start offset of trimmed window
+	GetTrimmedLines() []string // Lines sent to the model (nil if no trimming)
+}
+
+// StreamingState holds state during incremental line streaming
+type StreamingState struct {
+	// Stage building
+	StageBuilder *text.IncrementalStageBuilder
+
+	// Buffering for truncation safety
+	PendingLine    string // Buffer for last line (drop if truncated)
+	HasPendingLine bool
+
+	// Accumulated text for postprocessing
+	AccumulatedText strings.Builder
+
+	// Provider context for postprocessing
+	ProviderContext any
+	Validated       bool
+
+	// Request data needed for finalization
+	Request *types.CompletionRequest
+
+	// Track if we've rendered the first stage during streaming
+	// Only render one stage during streaming; rest handled at completion
+	FirstStageRendered bool
+}
+
+// TokenStreamingState holds state during token-by-token streaming
+type TokenStreamingState struct {
+	// Accumulated text (cumulative, not deltas)
+	AccumulatedText string
+
+	// Provider context for postprocessing
+	ProviderContext any
+
+	// Request data needed for finalization
+	Request *types.CompletionRequest
+
+	// Line prefix: text before cursor on current line (for rendering full line)
+	LinePrefix string
+
+	// Line number where ghost text is shown (1-indexed)
+	LineNum int
+}
+
 type state int
 
 const (
@@ -55,6 +145,7 @@ const (
 	statePendingCompletion
 	stateHasCompletion
 	stateHasCursorTarget
+	stateStreamingCompletion // New state for incremental streaming
 )
 
 type CursorPredictionConfig struct {
@@ -118,6 +209,16 @@ type Engine struct {
 	prefetchedCompletions  []*types.Completion
 	prefetchedCursorTarget *types.CursorPredictionTarget
 	prefetchState          prefetchState
+
+	// Streaming state (line-by-line)
+	streamingState   *StreamingState
+	streamingCancel  context.CancelFunc
+	streamLinesChan  <-chan string // Lines channel (nil when not streaming)
+	streamLineNum    int           // Line counter for current stream
+
+	// Token streaming state (token-by-token for inline)
+	tokenStreamingState *TokenStreamingState
+	tokenStreamChan     <-chan string // Token stream channel (nil when not streaming)
 
 	// Config options
 	config EngineConfig
@@ -284,10 +385,67 @@ func (e *Engine) eventLoop(ctx context.Context) {
 	}()
 
 	for {
+		// Get current stream channels (nil when not streaming)
+		e.mu.RLock()
+		linesChan := e.streamLinesChan
+		tokenChan := e.tokenStreamChan
+		e.mu.RUnlock()
+
 		select {
 		case <-ctx.Done():
 			// Clean shutdown when context is cancelled
 			return
+
+		case line, ok := <-linesChan:
+			// Direct stream line handling - no intermediate buffer
+			// When linesChan is nil, this case is never selected
+			e.mu.Lock()
+			if e.stopped {
+				e.mu.Unlock()
+				return
+			}
+			if e.streamLinesChan != linesChan {
+				// Stream changed while we were waiting, ignore stale data
+				e.mu.Unlock()
+				continue
+			}
+			if !ok {
+				// Channel closed - stream complete
+				logger.Debug("stream complete after %d lines", e.streamLineNum)
+				e.handleStreamCompleteSimple()
+				e.mu.Unlock()
+				continue
+			}
+			e.streamLineNum++
+			if e.streamLineNum <= 3 {
+				logger.Debug("stream line %d: %q", e.streamLineNum, line)
+			}
+			e.handleStreamLine(line)
+			e.mu.Unlock()
+
+		case text, ok := <-tokenChan:
+			// Token stream handling (cumulative text for inline completion)
+			// When tokenChan is nil, this case is never selected
+			e.mu.Lock()
+			if e.stopped {
+				e.mu.Unlock()
+				return
+			}
+			if e.tokenStreamChan != tokenChan {
+				// Stream changed while we were waiting, ignore stale data
+				e.mu.Unlock()
+				continue
+			}
+			if !ok {
+				// Channel closed - token stream complete
+				logger.Debug("token stream complete")
+				e.handleTokenStreamComplete()
+				e.mu.Unlock()
+				continue
+			}
+			e.handleTokenChunk(text)
+			e.mu.Unlock()
+
 		case event, ok := <-e.eventChan:
 			if !ok {
 				// Channel closed, exit gracefully
@@ -385,6 +543,9 @@ func (e *Engine) handleBackgroundEvent(event Event) bool {
 			e.handlePrefetchError(nil)
 		}
 		return true
+
+	// Note: EventStreamLine, EventStreamComplete, EventStreamError are now handled
+	// directly in the event loop via channel selection, not through eventChan
 	}
 	return false
 }
@@ -421,8 +582,39 @@ func (e *Engine) requestCompletion(source types.CompletionSource) {
 		return
 	}
 
-	e.state = statePendingCompletion
 	e.syncBuffer()
+
+	req := &types.CompletionRequest{
+		Source:            source,
+		WorkspacePath:     e.WorkspacePath,
+		WorkspaceID:       e.WorkspaceID,
+		FilePath:          e.buffer.Path(),
+		Lines:             e.buffer.Lines(),
+		Version:           e.buffer.Version(),
+		PreviousLines:     e.buffer.PreviousLines(),
+		FileDiffHistories: e.getAllFileDiffHistories(),
+		CursorRow:         e.buffer.Row(),
+		CursorCol:         e.buffer.Col(),
+		ViewportHeight:    e.getViewportHeightConstraint(),
+		LinterErrors:      e.buffer.LinterErrors(),
+	}
+
+	// Check if provider supports streaming
+	if streamProvider, ok := e.provider.(LineStreamProvider); ok {
+		switch streamProvider.GetStreamingType() {
+		case StreamingTypeLines:
+			e.requestStreamingCompletion(streamProvider, req)
+			return
+		case StreamingTypeTokens:
+			if tokenProvider, ok := e.provider.(TokenStreamProvider); ok {
+				e.requestTokenStreamingCompletion(tokenProvider, req)
+				return
+			}
+		}
+	}
+
+	// Fallback to batch mode
+	e.state = statePendingCompletion
 
 	ctx, cancel := context.WithTimeout(e.mainCtx, e.config.CompletionTimeout)
 	e.currentCancel = cancel
@@ -430,20 +622,7 @@ func (e *Engine) requestCompletion(source types.CompletionSource) {
 	go func() {
 		defer cancel()
 
-		result, err := e.provider.GetCompletion(ctx, &types.CompletionRequest{
-			Source:            source,
-			WorkspacePath:     e.WorkspacePath,
-			WorkspaceID:       e.WorkspaceID,
-			FilePath:          e.buffer.Path(),
-			Lines:             e.buffer.Lines(),
-			Version:           e.buffer.Version(),
-			PreviousLines:     e.buffer.PreviousLines(),
-			FileDiffHistories: e.getAllFileDiffHistories(),
-			CursorRow:         e.buffer.Row(),
-			CursorCol:         e.buffer.Col(),
-			ViewportHeight:    e.getViewportHeightConstraint(),
-			LinterErrors:      e.buffer.LinterErrors(),
-		})
+		result, err := e.provider.GetCompletion(ctx, req)
 
 		if err != nil {
 			select {
@@ -458,6 +637,100 @@ func (e *Engine) requestCompletion(source types.CompletionSource) {
 		case <-e.mainCtx.Done():
 		}
 	}()
+}
+
+// requestStreamingCompletion handles line-by-line streaming completions
+func (e *Engine) requestStreamingCompletion(provider LineStreamProvider, req *types.CompletionRequest) {
+	e.state = stateStreamingCompletion
+
+	ctx, cancel := context.WithTimeout(e.mainCtx, e.config.CompletionTimeout)
+	e.streamingCancel = cancel
+
+	// Prepare the stream
+	stream, providerCtx, err := provider.PrepareLineStream(ctx, req)
+	if err != nil {
+		cancel()
+		logger.Debug("streaming: PrepareLineStream failed: %v", err)
+		e.state = stateIdle
+		return
+	}
+
+	// Get old lines for incremental diff building.
+	// Extract trim info from provider context if available.
+	windowStart := 0
+	var oldLines []string
+	if tc, ok := providerCtx.(TrimmedContext); ok && len(tc.GetTrimmedLines()) > 0 {
+		// Provider trimmed the content - use trimmed lines and offset
+		windowStart = tc.GetWindowStart()
+		oldLines = tc.GetTrimmedLines()
+		logger.Debug("streaming: using trimmed window start=%d, lines=%d", windowStart, len(oldLines))
+	} else {
+		// No trimming - use full buffer
+		oldLines = req.Lines
+		logger.Debug("streaming: using full buffer, lines=%d", len(oldLines))
+	}
+
+	viewportTop, viewportBottom := e.buffer.ViewportBounds()
+
+	// Initialize streaming state
+	e.streamingState = &StreamingState{
+		StageBuilder: text.NewIncrementalStageBuilder(
+			oldLines,
+			windowStart+1, // baseLineOffset (1-indexed)
+			e.config.CursorPrediction.DistThreshold,
+			viewportTop,
+			viewportBottom,
+			e.buffer.Row(),
+			req.FilePath,
+		),
+		ProviderContext: providerCtx,
+		Request:         req,
+	}
+
+	logger.Debug("stream starting")
+
+	// Set stream channel directly - event loop will select on it
+	e.streamLinesChan = stream.LinesChan()
+	e.streamLineNum = 0
+}
+
+// requestTokenStreamingCompletion handles token-by-token streaming completions (inline)
+func (e *Engine) requestTokenStreamingCompletion(provider TokenStreamProvider, req *types.CompletionRequest) {
+	e.state = stateStreamingCompletion
+
+	ctx, cancel := context.WithTimeout(e.mainCtx, e.config.CompletionTimeout)
+	e.streamingCancel = cancel
+
+	// Prepare the stream
+	stream, providerCtx, err := provider.PrepareTokenStream(ctx, req)
+	if err != nil {
+		cancel()
+		logger.Debug("token streaming: PrepareTokenStream failed: %v", err)
+		e.state = stateIdle
+		return
+	}
+
+	// Get line prefix (text before cursor on current line)
+	linePrefix := ""
+	if req.CursorRow >= 1 && req.CursorRow <= len(req.Lines) {
+		currentLine := req.Lines[req.CursorRow-1]
+		cursorCol := min(req.CursorCol, len(currentLine))
+		linePrefix = currentLine[:cursorCol]
+	}
+
+	// Initialize token streaming state
+	e.tokenStreamingState = &TokenStreamingState{
+		AccumulatedText: "",
+		ProviderContext: providerCtx,
+		Request:         req,
+		LinePrefix:      linePrefix,
+		LineNum:         req.CursorRow,
+	}
+
+	logger.Debug("token stream starting at line %d, prefix=%q", req.CursorRow, linePrefix)
+
+	// Set token stream channel - event loop will select on it
+	e.tokenStreamChan = stream.LinesChan()
 }
 
 func (e *Engine) handleCursorTarget() {
@@ -1019,4 +1292,304 @@ func (e *Engine) getViewportHeightConstraint() int {
 		}
 	}
 	return 0
+}
+
+// cancelStreaming cancels an in-progress streaming completion (both line and token streaming)
+func (e *Engine) cancelStreaming() {
+	if e.streamLinesChan != nil {
+		logger.Debug("stream cancelling after %d lines", e.streamLineNum)
+	}
+	if e.tokenStreamChan != nil {
+		logger.Debug("token stream cancelling")
+	}
+	// Clear channels first - this immediately stops event loop from reading
+	e.streamLinesChan = nil
+	e.streamLineNum = 0
+	e.tokenStreamChan = nil
+	// Then cancel the HTTP request
+	if e.streamingCancel != nil {
+		e.streamingCancel()
+		e.streamingCancel = nil
+	}
+	e.streamingState = nil
+	e.tokenStreamingState = nil
+}
+
+// handleStreamLine processes a line received from the streaming provider.
+// Caller must verify stream ID matches before calling.
+func (e *Engine) handleStreamLine(line string) {
+	ss := e.streamingState
+	if ss == nil {
+		return
+	}
+
+	// Accumulate text for postprocessing
+	ss.AccumulatedText.WriteString(line)
+	ss.AccumulatedText.WriteString("\n")
+
+	// First line validation
+	if !ss.Validated {
+		if sp, ok := e.provider.(LineStreamProvider); ok {
+			if err := sp.ValidateFirstLine(ss.ProviderContext, line); err != nil {
+				logger.Debug("stream validation failed: %v", err)
+				e.cancelStreaming()
+				e.state = stateIdle
+				return
+			}
+		}
+		ss.Validated = true
+	}
+
+	// Process pending line through stage builder (if any)
+	if ss.HasPendingLine {
+		finalized := ss.StageBuilder.AddLine(ss.PendingLine)
+		if finalized != nil && !ss.FirstStageRendered {
+			// Check if this stage is close enough to render immediately
+			viewportTop, viewportBottom := e.buffer.ViewportBounds()
+			needsNav := text.StageNeedsNavigation(
+				finalized,
+				e.buffer.Row(),
+				viewportTop, viewportBottom,
+				e.config.CursorPrediction.DistThreshold,
+			)
+			if !needsNav {
+				// Stage is close to cursor - render it immediately
+				e.renderStreamedStage(finalized)
+				ss.FirstStageRendered = true
+			}
+			// If needsNav, don't render - let Finalize() handle it with cursor prediction
+		}
+	}
+
+	// Buffer current line (will be processed on next line or completion)
+	ss.PendingLine = line
+	ss.HasPendingLine = true
+}
+
+// handleStreamCompleteSimple processes stream completion when lines channel closes.
+// Called directly from event loop.
+func (e *Engine) handleStreamCompleteSimple() {
+	// Clear stream channel first
+	e.streamLinesChan = nil
+	e.streamLineNum = 0
+
+	if e.streamingState == nil {
+		return
+	}
+
+	ss := e.streamingState
+	firstStageRendered := ss.FirstStageRendered
+
+	// Process pending line if not truncated
+	if ss.HasPendingLine {
+		ss.StageBuilder.AddLine(ss.PendingLine)
+		ss.HasPendingLine = false
+	}
+
+	// Finalize remaining stages
+	stagingResult := ss.StageBuilder.Finalize()
+
+	// Clear streaming state
+	e.streamingState = nil
+	e.streamingCancel = nil
+
+	if stagingResult == nil || len(stagingResult.Stages) == 0 {
+		logger.Debug("stream complete: no stages to show")
+		e.state = stateIdle
+		return
+	}
+
+	// Convert to staged completion format
+	stagesAny := make([]any, len(stagingResult.Stages))
+	for i, s := range stagingResult.Stages {
+		stagesAny[i] = s
+	}
+	e.stagedCompletion = &types.StagedCompletion{
+		Stages:     stagesAny,
+		CurrentIdx: 0,
+		SourcePath: e.buffer.Path(),
+	}
+
+	// If we already rendered the first stage during streaming, don't re-render it
+	if firstStageRendered {
+		// Stage 0 is already showing - just update cursor target from finalized data
+		firstStage := stagingResult.Stages[0]
+		e.cursorTarget = firstStage.CursorTarget
+		e.state = stateHasCompletion
+		logger.Debug("stream complete: first stage already rendered, skipping re-render")
+		return
+	}
+
+	// Clear any UI (nothing was rendered during streaming)
+	e.buffer.ClearUI()
+
+	// Transition to appropriate state
+	if stagingResult.FirstNeedsNavigation {
+		firstStage := stagingResult.Stages[0]
+		e.cursorTarget = &types.CursorPredictionTarget{
+			RelativePath:    e.buffer.Path(),
+			LineNumber:      int32(firstStage.BufferStart),
+			ShouldRetrigger: false,
+		}
+		e.state = stateHasCursorTarget
+		e.buffer.ShowCursorTarget(firstStage.BufferStart)
+	} else {
+		e.showCurrentStage()
+	}
+}
+
+// renderStreamedStage renders a finalized stage during streaming
+func (e *Engine) renderStreamedStage(stage *text.Stage) {
+	if stage == nil || len(stage.Groups) == 0 {
+		return
+	}
+
+	// Prepare completion for this stage and render it
+	e.applyBatch = e.buffer.PrepareCompletion(
+		stage.BufferStart,
+		stage.BufferEnd,
+		stage.Lines,
+		stage.Groups,
+	)
+
+	// Store for partial typing optimization
+	bufferLines := e.buffer.Lines()
+	e.completionOriginalLines = nil
+	for i := stage.BufferStart; i <= stage.BufferEnd && i-1 < len(bufferLines); i++ {
+		e.completionOriginalLines = append(e.completionOriginalLines, bufferLines[i-1])
+	}
+
+	e.completions = []*types.Completion{{
+		StartLine:  stage.BufferStart,
+		EndLineInc: stage.BufferEnd,
+		Lines:      stage.Lines,
+	}}
+	e.cursorTarget = stage.CursorTarget
+
+	logger.Debug("rendered streamed stage: BufferStart=%d, BufferEnd=%d, groups=%d",
+		stage.BufferStart, stage.BufferEnd, len(stage.Groups))
+}
+
+// handleTokenChunk processes a cumulative text chunk from token streaming.
+// The text parameter contains the full accumulated text so far (not a delta).
+func (e *Engine) handleTokenChunk(accumulatedText string) {
+	ts := e.tokenStreamingState
+	if ts == nil {
+		return
+	}
+
+	// Update accumulated text
+	ts.AccumulatedText = accumulatedText
+
+	// Build the full line content
+	fullLineText := ts.LinePrefix + accumulatedText
+	lineNum := ts.LineNum
+	colStart := len(ts.LinePrefix)
+
+	// Get original line content
+	bufferLines := e.buffer.Lines()
+	var oldLine string
+	if lineNum >= 1 && lineNum <= len(bufferLines) {
+		oldLine = bufferLines[lineNum-1]
+	}
+
+	// Create a group with append_chars render hint
+	group := &text.Group{
+		Type:       "modification",
+		StartLine:  1,
+		EndLine:    1,
+		BufferLine: lineNum,
+		Lines:      []string{fullLineText},
+		OldLines:   []string{oldLine},
+		RenderHint: "append_chars",
+		ColStart:   colStart,
+		ColEnd:     len(fullLineText),
+	}
+
+	// Call PrepareCompletion to render the ghost text
+	e.applyBatch = e.buffer.PrepareCompletion(lineNum, lineNum, []string{fullLineText}, []*text.Group{group})
+
+	// Store completion state for partial typing optimization
+	e.completions = []*types.Completion{{
+		StartLine:  lineNum,
+		EndLineInc: lineNum,
+		Lines:      []string{fullLineText},
+	}}
+	e.completionOriginalLines = []string{oldLine}
+
+	logger.Debug("token chunk: len=%d, fullLine=%q", len(accumulatedText), fullLineText)
+}
+
+// handleTokenStreamComplete processes token stream completion when channel closes.
+// Called directly from event loop.
+func (e *Engine) handleTokenStreamComplete() {
+	// Clear token stream channel first
+	e.tokenStreamChan = nil
+
+	if e.tokenStreamingState == nil {
+		e.state = stateIdle
+		return
+	}
+
+	ts := e.tokenStreamingState
+	finalText := ts.AccumulatedText
+	providerCtx := ts.ProviderContext
+	req := ts.Request
+
+	// Clear token streaming state
+	e.tokenStreamingState = nil
+	e.streamingCancel = nil
+
+	// If empty, go idle
+	if finalText == "" {
+		logger.Debug("token stream complete: empty result")
+		e.buffer.ClearUI()
+		e.state = stateIdle
+		return
+	}
+
+	// Run postprocessors through provider
+	tokenProvider, ok := e.provider.(TokenStreamProvider)
+	if !ok {
+		logger.Debug("token stream complete: provider not TokenStreamProvider")
+		e.buffer.ClearUI()
+		e.state = stateIdle
+		return
+	}
+
+	resp, err := tokenProvider.FinishTokenStream(providerCtx, finalText)
+	if err != nil {
+		logger.Debug("token stream complete: FinishTokenStream error: %v", err)
+		e.buffer.ClearUI()
+		e.state = stateIdle
+		return
+	}
+
+	// Process the response like a normal completion
+	if resp == nil || len(resp.Completions) == 0 {
+		logger.Debug("token stream complete: no completions")
+		e.buffer.ClearUI()
+		e.state = stateIdle
+		return
+	}
+
+	// For inline provider, there's always just one completion
+	completion := resp.Completions[0]
+
+	// Validate completion is for current buffer state
+	if completion.StartLine < 1 || completion.StartLine > len(req.Lines) {
+		logger.Debug("token stream complete: invalid completion range")
+		e.buffer.ClearUI()
+		e.state = stateIdle
+		return
+	}
+
+	// Process through normal completion flow (handles staging etc.)
+	if e.processCompletion(completion) {
+		e.state = stateHasCompletion
+	} else {
+		logger.Debug("token stream complete: processCompletion returned false")
+		e.buffer.ClearUI()
+		e.state = stateIdle
+	}
 }

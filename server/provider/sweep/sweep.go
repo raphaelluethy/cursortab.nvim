@@ -10,10 +10,10 @@ import (
 // NewProvider creates a new Sweep Next-Edit model provider
 func NewProvider(config *types.ProviderConfig) *provider.Provider {
 	return &provider.Provider{
-		Name:      "sweep",
-		Config:    config,
-		Client:    openai.NewClient(config.ProviderURL, config.CompletionPath),
-		Streaming: true,
+		Name:          "sweep",
+		Config:        config,
+		Client:        openai.NewClient(config.ProviderURL, config.CompletionPath),
+		StreamingType: provider.StreamingLines, // Line-by-line streaming
 		Preprocessors: []provider.Preprocessor{
 			provider.TrimContent(),
 		},
@@ -24,6 +24,10 @@ func NewProvider(config *types.ProviderConfig) *provider.Provider {
 			provider.AnchorTruncation(0.75),
 			parseCompletion,
 		},
+		Validators: []provider.Validator{
+			provider.ValidateFirstLineAnchor(0.25),
+		},
+		StopTokens: []string{"<|file_sep|>", "</s>"},
 	}
 }
 

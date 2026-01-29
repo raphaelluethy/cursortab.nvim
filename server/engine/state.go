@@ -16,6 +16,8 @@ func (s state) String() string {
 		return "HasCompletion"
 	case stateHasCursorTarget:
 		return "HasCursorTarget"
+	case stateStreamingCompletion:
+		return "StreamingCompletion"
 	default:
 		return "Unknown"
 	}
@@ -82,6 +84,12 @@ var transitions = []Transition{
 	{stateHasCursorTarget, EventTextChanged, (*Engine).doRejectAndDebounce},
 	{stateHasCursorTarget, EventInsertLeave, (*Engine).doRejectAndStartIdleTimer},
 	{stateHasCursorTarget, EventCursorMovedNormal, (*Engine).doResetIdleTimer},
+
+	// From stateStreamingCompletion
+	{stateStreamingCompletion, EventEsc, (*Engine).doRejectStreaming},
+	{stateStreamingCompletion, EventTextChanged, (*Engine).doRejectStreamingAndDebounce},
+	{stateStreamingCompletion, EventInsertLeave, (*Engine).doRejectStreamingAndStartIdleTimer},
+	{stateStreamingCompletion, EventCursorMovedNormal, (*Engine).doResetIdleTimer},
 }
 
 // transitionMap provides O(1) lookup for transitions by (state, event) pair
@@ -201,4 +209,24 @@ func (e *Engine) doAcceptCursorTarget(event Event) {
 func (e *Engine) doTextChangeWithCompletion(event Event) {
 	e.handleTextChangeImpl()
 	// Note: handleTextChangeImpl handles state transitions internally
+}
+
+// Streaming state action functions
+
+func (e *Engine) doRejectStreaming(event Event) {
+	e.cancelStreaming()
+	e.reject()
+	e.stopIdleTimer()
+}
+
+func (e *Engine) doRejectStreamingAndDebounce(event Event) {
+	e.cancelStreaming()
+	e.reject()
+	e.startTextChangeTimer()
+}
+
+func (e *Engine) doRejectStreamingAndStartIdleTimer(event Event) {
+	e.cancelStreaming()
+	e.reject()
+	e.startIdleTimer()
 }

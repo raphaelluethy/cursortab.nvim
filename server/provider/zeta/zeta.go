@@ -11,10 +11,10 @@ import (
 // NewProvider creates a new Zeta provider (Zed's native model)
 func NewProvider(config *types.ProviderConfig) *provider.Provider {
 	return &provider.Provider{
-		Name:      "zeta",
-		Config:    config,
-		Client:    openai.NewClient(config.ProviderURL, config.CompletionPath),
-		Streaming: true,
+		Name:          "zeta",
+		Config:        config,
+		Client:        openai.NewClient(config.ProviderURL, config.CompletionPath),
+		StreamingType: provider.StreamingLines, // Line-by-line streaming
 		Preprocessors: []provider.Preprocessor{
 			provider.TrimContent(),
 		},
@@ -25,6 +25,10 @@ func NewProvider(config *types.ProviderConfig) *provider.Provider {
 			provider.AnchorTruncation(0.75),
 			parseCompletion,
 		},
+		Validators: []provider.Validator{
+			provider.ValidateFirstLineAnchor(0.25),
+		},
+		StopTokens: []string{"\n<|editable_region_end|>"},
 	}
 }
 

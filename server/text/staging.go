@@ -98,7 +98,7 @@ func CreateStages(
 	finalizeStages(allStages, newLines, filePath, baseLineOffset, diff)
 
 	// Step 5: Check if first stage needs navigation UI
-	firstNeedsNav := stageNeedsNavigation(
+	firstNeedsNav := StageNeedsNavigation(
 		allStages[0], cursorRow, viewportTop, viewportBottom, proximityThreshold,
 	)
 
@@ -180,8 +180,9 @@ func groupChangesIntoStages(diff *DiffResult, lineNumbers []int, proximityThresh
 	return stages
 }
 
-// stageNeedsNavigation determines if a stage requires cursor prediction UI.
-func stageNeedsNavigation(stage *Stage, cursorRow, viewportTop, viewportBottom, distThreshold int) bool {
+// StageNeedsNavigation determines if a stage requires cursor prediction UI.
+// Returns true if the stage is outside viewport or far from cursor.
+func StageNeedsNavigation(stage *Stage, cursorRow, viewportTop, viewportBottom, distThreshold int) bool {
 	if viewportTop > 0 && viewportBottom > 0 {
 		entirelyOutside := stage.BufferEnd < viewportTop || stage.BufferStart > viewportBottom
 		if entirelyOutside {

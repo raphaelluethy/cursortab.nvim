@@ -21,6 +21,11 @@ const (
 	EventCompletionError   EventType = "completion_error"
 	EventPrefetchReady     EventType = "prefetch_ready"
 	EventPrefetchError     EventType = "prefetch_error"
+
+	// Streaming events (handled directly via channel selection, not through eventChan)
+	EventStreamLine     EventType = "stream_line"     // A line was received from the stream
+	EventStreamComplete EventType = "stream_complete" // Stream completed
+	EventStreamError    EventType = "stream_error"    // Stream error
 )
 
 var eventTypeMap map[string]EventType
@@ -46,6 +51,9 @@ func buildEventTypeMap() map[string]EventType {
 		EventCompletionError,
 		EventPrefetchReady,
 		EventPrefetchError,
+		EventStreamLine,
+		EventStreamComplete,
+		EventStreamError,
 	}
 
 	// Build the map from EventType value to string

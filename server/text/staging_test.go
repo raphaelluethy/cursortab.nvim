@@ -1253,13 +1253,13 @@ func TestStageNeedsNavigation_PartiallyVisible(t *testing.T) {
 
 	// Viewport 1-50: stage 45-55 is partially visible
 	// Cursor at 47: distance to 45-55 is 0 (cursor within range)
-	needsNav := stageNeedsNavigation(stage, 47, 1, 50, 3)
+	needsNav := StageNeedsNavigation(stage, 47, 1, 50, 3)
 
 	// Not entirely outside viewport, cursor within stage
 	assert.False(t, needsNav, "should not need navigation when cursor is within stage")
 
 	// Cursor at 10: distance to 45-55 is 35
-	needsNav = stageNeedsNavigation(stage, 10, 1, 50, 3)
+	needsNav = StageNeedsNavigation(stage, 10, 1, 50, 3)
 
 	// Not entirely outside viewport, but far from cursor
 	assert.True(t, needsNav, "should need navigation when far from cursor")

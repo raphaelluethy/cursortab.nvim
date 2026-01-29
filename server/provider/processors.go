@@ -190,6 +190,27 @@ func ValidateAnchorPosition(maxAnchorRatio float64) Postprocessor {
 	}
 }
 
+// ValidateFirstLineAnchor returns a validator that checks the first streamed line anchors correctly.
+// This is the streaming equivalent of ValidateAnchorPosition.
+func ValidateFirstLineAnchor(maxAnchorRatio float64) Validator {
+	return func(p *Provider, ctx *Context, firstLine string) error {
+		oldLines := ctx.Request.Lines[ctx.WindowStart:ctx.WindowEnd]
+
+		if len(oldLines) <= 10 {
+			return nil // Not enough lines to validate
+		}
+
+		firstLineAnchor := findAnchorLineFullSearch(firstLine, oldLines)
+		maxAllowedAnchor := int(float64(len(oldLines)) * maxAnchorRatio)
+
+		if firstLineAnchor > maxAllowedAnchor {
+			return errors.New("first line anchor position too far from start")
+		}
+
+		return nil
+	}
+}
+
 // --- Helper functions ---
 
 // findAnchorLine searches for the best matching line in oldLines for the given needle.
