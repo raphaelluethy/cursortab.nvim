@@ -249,7 +249,36 @@ func (e *Engine) doRejectStreamingAndDebounce(event Event) {
 		return
 	}
 
-	// Line streaming or no match - reject everything
+	// For line streaming with partial results (first stage rendered), check if typing matches
+	if e.streamingState != nil && len(e.completions) > 0 {
+		// Cancel the stream but preserve the partial completion state
+		e.cancelLineStreamingKeepPartial()
+
+		// Check if the typed text matches the partial completion
+		e.syncBuffer()
+		matches, hasRemaining := e.checkTypingMatchesPrediction()
+		if matches {
+			if hasRemaining {
+				// Typing matches - keep completion state
+				logger.Debug("line stream: typing matches partial, keeping completion")
+				e.state = stateHasCompletion
+				return
+			}
+			// User typed everything
+			logger.Debug("line stream: typing matches partial, fully typed")
+			e.clearAll()
+			e.state = stateIdle
+			e.startTextChangeTimer()
+			return
+		}
+		// Doesn't match - reject
+		logger.Debug("line stream: typing doesn't match partial, rejecting")
+		e.reject()
+		e.startTextChangeTimer()
+		return
+	}
+
+	// No partial results - reject everything
 	e.cancelStreaming()
 	e.reject()
 	e.startTextChangeTimer()
