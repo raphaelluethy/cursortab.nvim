@@ -3,6 +3,7 @@ package sweep
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"cursortab/client/openai"
@@ -46,6 +47,17 @@ func newLocalProvider(config *types.ProviderConfig) *provider.Provider {
 
 // newHostedProvider creates a provider for hosted Sweep (sweep.dev)
 func newHostedProvider(config *types.ProviderConfig) (*provider.Provider, error) {
+	// Check if API key is available before attempting to create client
+	if config.APIKey == "" {
+		envVar := config.APIKeyEnv
+		if envVar == "" {
+			envVar = sweep.DefaultAPIKeyEnv
+		}
+		if os.Getenv(envVar) == "" {
+			return nil, fmt.Errorf("hosted Sweep requires API key: set %s environment variable or provide api_key in config", envVar)
+		}
+	}
+
 	client, err := sweep.NewClient(config.ProviderURL, config.APIKey, config.APIKeyEnv)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create sweep client: %w", err)

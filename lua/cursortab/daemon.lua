@@ -43,6 +43,42 @@ local function start_daemon()
 		return false
 	end
 
+	-- Check for hosted Sweep API key if using hosted Sweep
+	local cfg = config.get()
+	if cfg.provider.type == "sweep" then
+		local url = cfg.provider.url or ""
+		-- Check if it's a hosted URL (not localhost)
+		if not url:match("localhost") and not url:match("127%.0%.0%.1") then
+			local api_key = cfg.provider.api_key
+			local api_key_env = cfg.provider.api_key_env or "SWEEP_AI_TOKEN"
+
+			-- If no explicit API key, check environment variable
+			if not api_key or api_key == "" then
+				api_key = vim.fn.getenv(api_key_env)
+				-- vim.fn.getenv returns nil if env var is not set, or the value if set
+				-- If it's an empty string or vim.NIL, treat it as not set
+				if api_key == vim.NIL or api_key == "" then
+					api_key = nil
+				end
+			end
+
+			if not api_key then
+				vim.notify(
+					"[cursortab.nvim] Hosted Sweep requires an API key.\n"
+						.. "Please set the "
+						.. api_key_env
+						.. " environment variable\n"
+						.. "or add api_key to your configuration:\n"
+						.. '  provider = { type = "sweep", url = "'
+						.. url
+						.. '", api_key = "your-key" }',
+					vim.log.levels.ERROR
+				)
+				return false
+			end
+		end
+	end
+
 	-- Create JSON configuration (matches Go Config struct)
 	-- Note: UI config is Lua-only (for highlights), not sent to Go daemon
 	local cfg = config.get()
