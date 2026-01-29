@@ -92,7 +92,7 @@ type LineStream interface {
 // TrimmedContext provides access to trim info from the provider.
 // Implemented by provider.Context to allow engine to extract window offset.
 type TrimmedContext interface {
-	GetWindowStart() int      // 0-indexed start offset of trimmed window
+	GetWindowStart() int       // 0-indexed start offset of trimmed window
 	GetTrimmedLines() []string // Lines sent to the model (nil if no trimming)
 }
 
@@ -149,9 +149,9 @@ const (
 )
 
 type CursorPredictionConfig struct {
-	Enabled       bool // Show jump indicators (default: true)
-	AutoAdvance   bool // On no-op, jump to last line + retrigger (default: true)
-	ProximityThreshold int // Lines apart to trigger staging (default: 3)
+	Enabled            bool // Show jump indicators (default: true)
+	AutoAdvance        bool // On no-op, jump to last line + retrigger (default: true)
+	ProximityThreshold int  // Lines apart to trigger staging (default: 3)
 }
 
 // FileState holds per-file context that persists across file switches
@@ -211,10 +211,10 @@ type Engine struct {
 	prefetchState          prefetchState
 
 	// Streaming state (line-by-line)
-	streamingState   *StreamingState
-	streamingCancel  context.CancelFunc
-	streamLinesChan  <-chan string // Lines channel (nil when not streaming)
-	streamLineNum    int           // Line counter for current stream
+	streamingState  *StreamingState
+	streamingCancel context.CancelFunc
+	streamLinesChan <-chan string // Lines channel (nil when not streaming)
+	streamLineNum   int           // Line counter for current stream
 
 	// Token streaming state (token-by-token for inline)
 	tokenStreamingState *TokenStreamingState
@@ -544,8 +544,8 @@ func (e *Engine) handleBackgroundEvent(event Event) bool {
 		}
 		return true
 
-	// Note: EventStreamLine, EventStreamComplete, EventStreamError are now handled
-	// directly in the event loop via channel selection, not through eventChan
+		// Note: EventStreamLine, EventStreamComplete, EventStreamError are now handled
+		// directly in the event loop via channel selection, not through eventChan
 	}
 	return false
 }

@@ -13,7 +13,7 @@ func NewProvider(config *types.ProviderConfig) *provider.Provider {
 		Name:          "sweep",
 		Config:        config,
 		Client:        openai.NewClient(config.ProviderURL, config.CompletionPath),
-		StreamingType: provider.StreamingLines, // Line-by-line streaming
+		StreamingType: provider.StreamingLines,
 		Preprocessors: []provider.Preprocessor{
 			provider.TrimContent(),
 		},
