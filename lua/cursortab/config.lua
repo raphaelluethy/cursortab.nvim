@@ -43,6 +43,8 @@
 ---@field max_diff_history_tokens integer
 ---@field completion_path string API endpoint path (e.g., "/v1/completions")
 ---@field fim_tokens CursortabFIMTokensConfig|nil FIM tokens configuration (optional)
+---@field api_key string|nil API key for hosted providers (e.g., Sweep)
+---@field api_key_env string Environment variable name for API key (default: "SWEEP_AI_TOKEN")
 
 ---@class CursortabDebugConfig
 ---@field immediate_shutdown boolean
@@ -102,6 +104,8 @@ local default_config = {
 			suffix = "<|fim_suffix|>",
 			middle = "<|fim_middle|>",
 		},
+		api_key = nil, -- API key for hosted providers (nil to use env var)
+		api_key_env = "SWEEP_AI_TOKEN", -- Environment variable name for API key
 	},
 
 	debug = {

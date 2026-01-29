@@ -129,4 +129,6 @@ type ProviderConfig struct {
 	ProviderTopK        int            // Top-k sampling (used by some providers)
 	CompletionPath      string         // API endpoint path (e.g., "/v1/completions")
 	FIMTokens           FIMTokenConfig // FIM tokens configuration
+	APIKey              string         // API key for hosted providers (e.g., Sweep)
+	APIKeyEnv           string         // Environment variable name for API key
 }

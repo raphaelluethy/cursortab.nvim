@@ -44,6 +44,8 @@ type ProviderConfig struct {
 	MaxDiffHistoryTokens int             `json:"max_diff_history_tokens"`
 	CompletionPath       string          `json:"completion_path"`
 	FIMTokens            FIMTokensConfig `json:"fim_tokens"`
+	APIKey               string          `json:"api_key"`     // API key for hosted providers
+	APIKeyEnv            string          `json:"api_key_env"` // Environment variable name for API key
 }
 
 // DebugConfig holds debug settings

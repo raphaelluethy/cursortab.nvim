@@ -46,6 +46,8 @@ func NewDaemon(config Config) (*Daemon, error) {
 		ProviderMaxTokens:   config.Provider.MaxTokens,
 		ProviderTopK:        config.Provider.TopK,
 		CompletionPath:      config.Provider.CompletionPath,
+		APIKey:              config.Provider.APIKey,
+		APIKeyEnv:           config.Provider.APIKeyEnv,
 	}
 
 	providerConfig.FIMTokens = types.FIMTokenConfig{
@@ -55,13 +57,17 @@ func NewDaemon(config Config) (*Daemon, error) {
 	}
 
 	var prov engine.Provider
+	var provErr error
 	switch types.ProviderType(config.Provider.Type) {
 	case types.ProviderTypeInline:
 		prov = inline.NewProvider(providerConfig)
 	case types.ProviderTypeFIM:
 		prov = fim.NewProvider(providerConfig)
 	case types.ProviderTypeSweep:
-		prov = sweep.NewProvider(providerConfig)
+		prov, provErr = sweep.NewProvider(providerConfig)
+		if provErr != nil {
+			return nil, fmt.Errorf("failed to create sweep provider: %w", provErr)
+		}
 	case types.ProviderTypeZeta:
 		prov = zeta.NewProvider(providerConfig)
 	default:

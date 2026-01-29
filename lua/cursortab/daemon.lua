@@ -69,6 +69,8 @@ local function start_daemon()
 			max_diff_history_tokens = cfg.provider.max_diff_history_tokens,
 			completion_path = cfg.provider.completion_path,
 			fim_tokens = cfg.provider.fim_tokens,
+			api_key = cfg.provider.api_key,
+			api_key_env = cfg.provider.api_key_env,
 		},
 		debug = {
 			immediate_shutdown = cfg.debug.immediate_shutdown,
