@@ -63,6 +63,8 @@ type StreamResult struct {
 	Text         string
 	FinishReason string
 	StoppedEarly bool
+	StartIndex   int // Byte offset for start of edit (used by Sweep)
+	EndIndex     int // Byte offset for end of edit (used by Sweep)
 }
 
 // DefaultCompletionPath is the default API endpoint path

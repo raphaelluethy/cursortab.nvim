@@ -2,6 +2,7 @@ package sweep
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -100,28 +101,69 @@ func (h *hostedSweepClient) DoCompletion(ctx context.Context, req *openai.Comple
 }
 
 func (h *hostedSweepClient) DoStreamingCompletion(ctx context.Context, req *openai.CompletionRequest, maxLines int) (*openai.StreamResult, error) {
-	// Hosted Sweep doesn't support streaming, so we use regular completion
-	resp, err := h.DoCompletion(ctx, req)
+	// Hosted Sweep doesn't support streaming, so we call the Sweep API directly
+	sweepReq := convertToSweepRequest(req)
+
+	sweepResp, err := h.client.DoAutocomplete(ctx, sweepReq)
 	if err != nil {
 		return nil, err
 	}
 
-	result := &openai.StreamResult{}
-	if len(resp.Choices) > 0 {
-		result.Text = resp.Choices[0].Text
-		result.FinishReason = resp.Choices[0].FinishReason
-	}
-	return result, nil
+	return &openai.StreamResult{
+		Text:         sweepResp.Completion,
+		FinishReason: getFinishReason(sweepResp.FinishReason),
+		StartIndex:   sweepResp.StartIndex,
+		EndIndex:     sweepResp.EndIndex,
+	}, nil
+}
+
+// sweepRequestContext holds the context needed to build a Sweep request
+// This is passed through the OpenAI request via a custom field
+type sweepRequestContext struct {
+	FilePath             string
+	FileContents         string
+	OriginalFileContents string
+	CursorPosition       int
+	RecentChanges        string
+	RepoName             string
 }
 
 // convertToSweepRequest converts an OpenAI completion request to Sweep format
 func convertToSweepRequest(req *openai.CompletionRequest) *sweep.AutocompleteRequest {
-	// Extract file path and content from the prompt
-	// The prompt format is specific to how Sweep expects it
+	// The Prompt field now contains JSON-encoded sweep request context
+	var ctx sweepRequestContext
+	if err := json.Unmarshal([]byte(req.Prompt), &ctx); err != nil {
+		// Fallback for backwards compatibility
+		return &sweep.AutocompleteRequest{
+			FilePath:             "",
+			FileContents:         req.Prompt,
+			OriginalFileContents: req.Prompt,
+			CursorPosition:       len(req.Prompt),
+			DebugInfo:            "cursortab.nvim",
+			RepoName:             "unknown",
+			ChangesAboveCursor:   true,
+			UseBytes:             true,
+			FileChunks:           []sweep.FileChunk{},
+			RetrievalChunks:      []sweep.FileChunk{},
+			RecentUserActions:    []sweep.UserAction{},
+		}
+	}
+
 	return &sweep.AutocompleteRequest{
-		FilePath: extractFilePath(req.Prompt),
-		Prefix:   req.Prompt,
-		// Other fields will be populated based on context
+		DebugInfo:            "cursortab.nvim",
+		RepoName:             ctx.RepoName,
+		FilePath:             ctx.FilePath,
+		FileContents:         ctx.FileContents,
+		OriginalFileContents: ctx.OriginalFileContents,
+		CursorPosition:       ctx.CursorPosition,
+		RecentChanges:        ctx.RecentChanges,
+		ChangesAboveCursor:   true,
+		MultipleSuggestions:  false,
+		PrivacyModeEnabled:   false,
+		UseBytes:             true,
+		FileChunks:           []sweep.FileChunk{},
+		RetrievalChunks:      []sweep.FileChunk{},
+		RecentUserActions:    []sweep.UserAction{},
 	}
 }
 
@@ -235,16 +277,53 @@ func buildLocalPrompt(p *provider.Provider, ctx *provider.Context) *openai.Compl
 
 // buildHostedPrompt builds the prompt for hosted Sweep
 func buildHostedPrompt(p *provider.Provider, ctx *provider.Context) *openai.CompletionRequest {
-	// For hosted Sweep, we need to build a different prompt format
-	// that the sweep client will convert to the proper API request
-	var promptBuilder strings.Builder
+	req := ctx.Request
+	fileContents := strings.Join(ctx.TrimmedLines, "\n")
 
-	// Write the current file content
-	promptBuilder.WriteString(strings.Join(ctx.TrimmedLines, "\n"))
+	// Get original file contents
+	originalContents := fileContents
+	if len(req.PreviousLines) > 0 {
+		originalContents = strings.Join(req.PreviousLines, "\n")
+	}
+
+	// Calculate cursor position as byte offset
+	cursorPosition := 0
+	cursorLine := req.CursorRow - 1 // Convert to 0-indexed (CursorRow is 1-indexed)
+	cursorCol := req.CursorCol      // CursorCol is already 0-indexed
+
+	for i, line := range ctx.TrimmedLines {
+		if i < cursorLine {
+			cursorPosition += len(line) + 1 // +1 for newline
+		} else if i == cursorLine {
+			if cursorCol > len(line) {
+				cursorCol = len(line)
+			}
+			cursorPosition += cursorCol
+			break
+		}
+	}
+
+	// Build recent changes from diff history
+	recentChanges := buildRecentChanges(req)
+
+	// Get repo name from file path
+	repoName := extractRepoName(req.FilePath)
+
+	// Encode context as JSON for the sweep client
+	sweepCtx := sweepRequestContext{
+		FilePath:             req.FilePath,
+		FileContents:         fileContents,
+		OriginalFileContents: originalContents,
+		CursorPosition:       cursorPosition,
+		RecentChanges:        recentChanges,
+		RepoName:             repoName,
+	}
+
+	contextJSON, _ := json.Marshal(sweepCtx)
 
 	return &openai.CompletionRequest{
 		Model:       "sweep",
-		Prompt:      promptBuilder.String(),
+		Prompt:      string(contextJSON),
 		Temperature: p.Config.ProviderTemperature,
 		MaxTokens:   p.Config.ProviderMaxTokens,
 		TopK:        p.Config.ProviderTopK,
@@ -252,6 +331,47 @@ func buildHostedPrompt(p *provider.Provider, ctx *provider.Context) *openai.Comp
 		N:           1,
 		Echo:        false,
 	}
+}
+
+// buildRecentChanges builds the recent changes string from diff history
+func buildRecentChanges(req *types.CompletionRequest) string {
+	if len(req.FileDiffHistories) == 0 {
+		return ""
+	}
+
+	var builder strings.Builder
+	for _, fileHistory := range req.FileDiffHistories {
+		for _, diffEntry := range fileHistory.DiffHistory {
+			if diffEntry.Original == "" && diffEntry.Updated == "" {
+				continue
+			}
+			fmt.Fprintf(&builder, "File: %s:\n", fileHistory.FileName)
+			if diffEntry.Original != "" {
+				fmt.Fprintf(&builder, "-%s\n", diffEntry.Original)
+			}
+			if diffEntry.Updated != "" {
+				fmt.Fprintf(&builder, "+%s\n", diffEntry.Updated)
+			}
+		}
+	}
+	return builder.String()
+}
+
+// extractRepoName extracts the repository name from a file path
+func extractRepoName(filePath string) string {
+	parts := strings.Split(filePath, "/")
+	for i, part := range parts {
+		if part == "src" || part == "lib" || part == "app" || part == "pkg" {
+			if i > 0 {
+				return parts[i-1]
+			}
+		}
+	}
+	// Fallback: use parent directory name
+	if len(parts) >= 2 {
+		return parts[len(parts)-2]
+	}
+	return "unknown"
 }
 
 func buildDiffSection(req *types.CompletionRequest) string {
@@ -338,9 +458,63 @@ func parseLocalCompletion(p *provider.Provider, ctx *provider.Context) (*types.C
 }
 
 func parseHostedCompletion(p *provider.Provider, ctx *provider.Context) (*types.CompletionResponse, bool) {
-	// For hosted Sweep, the completion is already processed
-	// We just need to convert it to the right format
-	return parseLocalCompletion(p, ctx)
+	// The Sweep response contains completion text and start/end indices
+	// The indices are byte offsets in the file
+	completionText := ctx.Result.Text
+	if completionText == "" {
+		return p.EmptyResponse(), true
+	}
+
+	req := ctx.Request
+	fileContents := strings.Join(req.Lines, "\n")
+
+	// Get start and end indices from the result metadata
+	startIndex := ctx.Result.StartIndex
+	endIndex := ctx.Result.EndIndex
+
+	// If indices are not set, fall back to local parsing
+	if startIndex == 0 && endIndex == 0 {
+		return parseLocalCompletion(p, ctx)
+	}
+
+	// Extract the old text being replaced
+	if startIndex > len(fileContents) {
+		startIndex = len(fileContents)
+	}
+	if endIndex > len(fileContents) {
+		endIndex = len(fileContents)
+	}
+	if startIndex > endIndex {
+		startIndex = endIndex
+	}
+
+	oldText := fileContents[startIndex:endIndex]
+
+	// If the completion is the same as the old text, no change needed
+	if completionText == oldText {
+		return p.EmptyResponse(), true
+	}
+
+	// Convert byte offsets to line numbers
+	startLine := 1
+	endLine := 1
+	byteCount := 0
+	for i, line := range req.Lines {
+		lineLen := len(line) + 1 // +1 for newline
+		if byteCount+lineLen > startIndex && startLine == 1 {
+			startLine = i + 1
+		}
+		if byteCount+lineLen >= endIndex {
+			endLine = i + 1
+			break
+		}
+		byteCount += lineLen
+	}
+
+	// Build the new lines
+	newLines := strings.Split(completionText, "\n")
+
+	return p.BuildCompletion(ctx, startLine, endLine, newLines)
 }
 
 func min(a, b int) int {

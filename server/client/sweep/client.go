@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	DefaultAutocompletePath = "/v1/autocomplete"
-	DefaultMetricsPath      = "/v1/metrics"
+	DefaultAutocompletePath = "/backend/next_edit_autocomplete"
+	DefaultMetricsPath      = "/backend/track_autocomplete_metrics"
 	DefaultAPIKeyEnv        = "SWEEP_AI_TOKEN"
 )
 
