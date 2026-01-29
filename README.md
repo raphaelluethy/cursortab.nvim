@@ -209,11 +209,12 @@ file for small files, trimmed around cursor for large files.
 
 **Requirements:**
 
-- vLLM or compatible inference server
+- vLLM or compatible inference server (for local deployment)
+- OR a Sweep API key (for hosted deployment)
 - Sweep Next-Edit model downloaded from
-  [Hugging Face](https://huggingface.co/sweepai/sweep-next-edit-1.5b)
+  [Hugging Face](https://huggingface.co/sweepai/sweep-next-edit-1.5b) (for local deployment)
 
-**Example Configuration:**
+**Local Deployment:**
 
 ```lua
 require("cursortab").setup({
@@ -224,14 +225,39 @@ require("cursortab").setup({
 })
 ```
 
-**Example Setup:**
-
 ```bash
 # Using llama.cpp
 llama-server -hf sweepai/sweep-next-edit-1.5b-GGUF --port 8000
 
 # Or with a local GGUF file
 llama-server -m sweep-next-edit-1.5b.q8_0.v2.gguf --port 8000
+```
+
+**Hosted Deployment (Sweep Cloud):**
+
+```lua
+require("cursortab").setup({
+  provider = {
+    type = "sweep",
+    url = "https://autocomplete.sweep.dev",
+    -- API key is read from SWEEP_AI_TOKEN environment variable by default
+    -- Or you can specify it directly (not recommended):
+    -- api_key = "your-api-key-here",
+    -- Or use a custom environment variable:
+    -- api_key_env = "MY_SWEEP_KEY",
+  },
+})
+```
+
+**Authentication:**
+
+The plugin will look for the API key in this order:
+1. `api_key` config option (if set)
+2. Environment variable specified by `api_key_env` (default: `SWEEP_AI_TOKEN`)
+
+To set the environment variable:
+```bash
+export SWEEP_AI_TOKEN="your-api-key-here"
 ```
 
 #### Zeta Provider
