@@ -622,25 +622,6 @@ func TestTrimFileStateStore(t *testing.T) {
 	assert.True(t, existsE, "should keep e.go (most recent)")
 }
 
-func TestPrefetchStateString(t *testing.T) {
-	tests := []struct {
-		state prefetchState
-		want  string
-	}{
-		{prefetchNone, "None"},
-		{prefetchInFlight, "InFlight"},
-		{prefetchWaitingForTab, "WaitingForTab"},
-		{prefetchWaitingForCursorPrediction, "WaitingForCursorPrediction"},
-		{prefetchReady, "Ready"},
-		{prefetchState(99), "Unknown"},
-	}
-
-	for _, tt := range tests {
-		got := tt.state.String()
-		assert.Equal(t, tt.want, got, "prefetchState String")
-	}
-}
-
 // --- Token Streaming Keep Partial Tests ---
 
 func TestTokenStreamingKeepPartial_TypingMatchesPartial(t *testing.T) {

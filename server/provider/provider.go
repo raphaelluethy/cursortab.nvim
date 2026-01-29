@@ -163,7 +163,7 @@ func (p *Provider) logRequest(req *openai.CompletionRequest, maxLines int) {
 }
 
 func (p *Provider) logResponse(result *openai.StreamResult) {
-	logger.Debug("%s provider response:\n  Text length: %d chars\n  FinishReason: %s\n  StoppedEarly: %v\n  Text: %q",
+	logger.Debug("%s provider response:\n  Text length: %d chars\n  FinishReason: %s\n  StoppedEarly: %v\n  Text:\n%s",
 		p.Name,
 		len(result.Text),
 		result.FinishReason,

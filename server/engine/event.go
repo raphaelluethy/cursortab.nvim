@@ -91,18 +91,16 @@ func (e *Engine) handleTextChangeImpl() {
 	if matches {
 		if hasRemaining {
 			// Typing matches - Lua already updated the visual, just keep completion state
-			logger.Debug("typing matches prediction, keeping completion state")
 			return
 		}
 		// User typed everything - completion fully typed
-		logger.Debug("typing matches prediction, completion fully typed")
 		e.clearAll()
 		e.state = stateIdle
 		e.startTextChangeTimer()
 		return
 	}
 
-	logger.Debug("typing does not match prediction, rejecting")
+	// Typing does not match prediction
 	e.reject()
 	e.startTextChangeTimer()
 }

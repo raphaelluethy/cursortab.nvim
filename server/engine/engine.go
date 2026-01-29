@@ -411,15 +411,11 @@ func (e *Engine) eventLoop(ctx context.Context) {
 			}
 			if !ok {
 				// Channel closed - stream complete
-				logger.Debug("stream complete after %d lines", e.streamLineNum)
 				e.handleStreamCompleteSimple()
 				e.mu.Unlock()
 				continue
 			}
 			e.streamLineNum++
-			if e.streamLineNum <= 3 {
-				logger.Debug("stream line %d: %q", e.streamLineNum, line)
-			}
 			e.handleStreamLine(line)
 			e.mu.Unlock()
 
@@ -438,7 +434,6 @@ func (e *Engine) eventLoop(ctx context.Context) {
 			}
 			if !ok {
 				// Channel closed - token stream complete
-				logger.Debug("token stream complete")
 				e.handleTokenStreamComplete()
 				e.mu.Unlock()
 				continue
@@ -503,16 +498,13 @@ func (e *Engine) handleBackgroundEvent(event Event) bool {
 	switch event.Type {
 	case EventCompletionReady:
 		if e.state != statePendingCompletion {
-			logger.Debug("ignoring stale completion: state=%v", e.state)
 			return true
 		}
 		e.handleCompletionReadyImpl(event.Data.(*types.CompletionResponse))
 		return true
 
 	case EventCompletionError:
-		if err, ok := event.Data.(error); ok && errors.Is(err, context.Canceled) {
-			logger.Debug("completion canceled: %v", err)
-		} else {
+		if err, ok := event.Data.(error); !ok || !errors.Is(err, context.Canceled) {
 			logger.Error("completion error: %v", event.Data)
 		}
 		return true
@@ -522,7 +514,6 @@ func (e *Engine) handleBackgroundEvent(event Event) bool {
 		if e.prefetchState != prefetchInFlight &&
 			e.prefetchState != prefetchWaitingForTab &&
 			e.prefetchState != prefetchWaitingForCursorPrediction {
-			logger.Debug("ignoring stale prefetch: prefetchState=%v", e.prefetchState)
 			return true
 		}
 		e.handlePrefetchReady(event.Data.(*types.CompletionResponse))
@@ -533,7 +524,6 @@ func (e *Engine) handleBackgroundEvent(event Event) bool {
 		if e.prefetchState != prefetchInFlight &&
 			e.prefetchState != prefetchWaitingForTab &&
 			e.prefetchState != prefetchWaitingForCursorPrediction {
-			logger.Debug("ignoring stale prefetch error: prefetchState=%v", e.prefetchState)
 			return true
 		}
 		// Nil-safe error handling
@@ -650,7 +640,6 @@ func (e *Engine) requestStreamingCompletion(provider LineStreamProvider, req *ty
 	stream, providerCtx, err := provider.PrepareLineStream(ctx, req)
 	if err != nil {
 		cancel()
-		logger.Debug("streaming: PrepareLineStream failed: %v", err)
 		e.state = stateIdle
 		return
 	}
@@ -663,11 +652,9 @@ func (e *Engine) requestStreamingCompletion(provider LineStreamProvider, req *ty
 		// Provider trimmed the content - use trimmed lines and offset
 		windowStart = tc.GetWindowStart()
 		oldLines = tc.GetTrimmedLines()
-		logger.Debug("streaming: using trimmed window start=%d, lines=%d", windowStart, len(oldLines))
 	} else {
 		// No trimming - use full buffer
 		oldLines = req.Lines
-		logger.Debug("streaming: using full buffer, lines=%d", len(oldLines))
 	}
 
 	viewportTop, viewportBottom := e.buffer.ViewportBounds()
@@ -687,8 +674,6 @@ func (e *Engine) requestStreamingCompletion(provider LineStreamProvider, req *ty
 		Request:         req,
 	}
 
-	logger.Debug("stream starting")
-
 	// Set stream channel directly - event loop will select on it
 	e.streamLinesChan = stream.LinesChan()
 	e.streamLineNum = 0
@@ -705,7 +690,6 @@ func (e *Engine) requestTokenStreamingCompletion(provider TokenStreamProvider, r
 	stream, providerCtx, err := provider.PrepareTokenStream(ctx, req)
 	if err != nil {
 		cancel()
-		logger.Debug("token streaming: PrepareTokenStream failed: %v", err)
 		e.state = stateIdle
 		return
 	}
@@ -726,8 +710,6 @@ func (e *Engine) requestTokenStreamingCompletion(provider TokenStreamProvider, r
 		LinePrefix:      linePrefix,
 		LineNum:         req.CursorRow,
 	}
-
-	logger.Debug("token stream starting at line %d, prefix=%q", req.CursorRow, linePrefix)
 
 	// Set token stream channel - event loop will select on it
 	e.tokenStreamChan = stream.LinesChan()
@@ -941,12 +923,10 @@ func (e *Engine) handleFileSwitch(oldPath, newPath string, currentLines []string
 			// Restore the saved state
 			e.buffer.SetFileContext(state.PreviousLines, state.OriginalLines, state.DiffHistories)
 			state.LastAccessNs = e.clock.Now().UnixNano()
-			logger.Debug("restored file state for %s (version=%d, diffs=%d)", newPath, state.Version, len(state.DiffHistories))
 			return true
 		}
 		// State is stale (file changed externally) - discard it
 		delete(e.fileStateStore, newPath)
-		logger.Debug("discarded stale file state for %s", newPath)
 	}
 
 	// New file or stale state - initialize fresh (PreviousLines stays nil for new files)
@@ -1174,7 +1154,6 @@ func (e *Engine) processCompletion(completion *types.Completion) bool {
 
 	// Check for actual changes
 	if !e.buffer.HasChanges(completion.StartLine, completion.EndLineInc, completion.Lines) {
-		logger.Debug("processCompletion: no changes detected")
 		return false
 	}
 
@@ -1296,12 +1275,6 @@ func (e *Engine) getViewportHeightConstraint() int {
 
 // cancelStreaming cancels an in-progress streaming completion (both line and token streaming)
 func (e *Engine) cancelStreaming() {
-	if e.streamLinesChan != nil {
-		logger.Debug("stream cancelling after %d lines", e.streamLineNum)
-	}
-	if e.tokenStreamChan != nil {
-		logger.Debug("token stream cancelling")
-	}
 	// Clear channels first - this immediately stops event loop from reading
 	e.streamLinesChan = nil
 	e.streamLineNum = 0
@@ -1319,9 +1292,6 @@ func (e *Engine) cancelStreaming() {
 // completion state (completions and completionOriginalLines) for typing match validation.
 // Used when user types during token streaming to check if typing matches partial result.
 func (e *Engine) cancelTokenStreamingKeepPartial() {
-	if e.tokenStreamChan != nil {
-		logger.Debug("token stream cancelling (keeping partial)")
-	}
 	// Clear channel first - stops event loop from reading
 	e.tokenStreamChan = nil
 	// Cancel the HTTP request
@@ -1338,9 +1308,6 @@ func (e *Engine) cancelTokenStreamingKeepPartial() {
 // completion state (completions and completionOriginalLines) for typing match validation.
 // Used when user types during line streaming after first stage was rendered.
 func (e *Engine) cancelLineStreamingKeepPartial() {
-	if e.streamLinesChan != nil {
-		logger.Debug("line stream cancelling (keeping partial)")
-	}
 	// Clear channel first - stops event loop from reading
 	e.streamLinesChan = nil
 	e.streamLineNum = 0
@@ -1370,7 +1337,6 @@ func (e *Engine) handleStreamLine(line string) {
 	if !ss.Validated {
 		if sp, ok := e.provider.(LineStreamProvider); ok {
 			if err := sp.ValidateFirstLine(ss.ProviderContext, line); err != nil {
-				logger.Debug("stream validation failed: %v", err)
 				e.cancelStreaming()
 				e.state = stateIdle
 				return
@@ -1433,7 +1399,6 @@ func (e *Engine) handleStreamCompleteSimple() {
 	e.streamingCancel = nil
 
 	if stagingResult == nil || len(stagingResult.Stages) == 0 {
-		logger.Debug("stream complete: no stages to show")
 		e.state = stateIdle
 		return
 	}
@@ -1455,7 +1420,6 @@ func (e *Engine) handleStreamCompleteSimple() {
 		firstStage := stagingResult.Stages[0]
 		e.cursorTarget = firstStage.CursorTarget
 		e.state = stateHasCompletion
-		logger.Debug("stream complete: first stage already rendered, skipping re-render")
 		return
 	}
 
@@ -1504,9 +1468,6 @@ func (e *Engine) renderStreamedStage(stage *text.Stage) {
 		Lines:      stage.Lines,
 	}}
 	e.cursorTarget = stage.CursorTarget
-
-	logger.Debug("rendered streamed stage: BufferStart=%d, BufferEnd=%d, groups=%d",
-		stage.BufferStart, stage.BufferEnd, len(stage.Groups))
 }
 
 // handleTokenChunk processes a cumulative text chunk from token streaming.
@@ -1555,8 +1516,6 @@ func (e *Engine) handleTokenChunk(accumulatedText string) {
 		Lines:      []string{fullLineText},
 	}}
 	e.completionOriginalLines = []string{oldLine}
-
-	logger.Debug("token chunk: len=%d, fullLine=%q", len(accumulatedText), fullLineText)
 }
 
 // handleTokenStreamComplete processes token stream completion when channel closes.
@@ -1581,7 +1540,6 @@ func (e *Engine) handleTokenStreamComplete() {
 
 	// If empty, go idle
 	if finalText == "" {
-		logger.Debug("token stream complete: empty result")
 		e.buffer.ClearUI()
 		e.state = stateIdle
 		return
@@ -1590,7 +1548,6 @@ func (e *Engine) handleTokenStreamComplete() {
 	// Run postprocessors through provider
 	tokenProvider, ok := e.provider.(TokenStreamProvider)
 	if !ok {
-		logger.Debug("token stream complete: provider not TokenStreamProvider")
 		e.buffer.ClearUI()
 		e.state = stateIdle
 		return
@@ -1598,7 +1555,6 @@ func (e *Engine) handleTokenStreamComplete() {
 
 	resp, err := tokenProvider.FinishTokenStream(providerCtx, finalText)
 	if err != nil {
-		logger.Debug("token stream complete: FinishTokenStream error: %v", err)
 		e.buffer.ClearUI()
 		e.state = stateIdle
 		return
@@ -1606,7 +1562,6 @@ func (e *Engine) handleTokenStreamComplete() {
 
 	// Process the response like a normal completion
 	if resp == nil || len(resp.Completions) == 0 {
-		logger.Debug("token stream complete: no completions")
 		e.buffer.ClearUI()
 		e.state = stateIdle
 		return
@@ -1617,7 +1572,6 @@ func (e *Engine) handleTokenStreamComplete() {
 
 	// Validate completion is for current buffer state
 	if completion.StartLine < 1 || completion.StartLine > len(req.Lines) {
-		logger.Debug("token stream complete: invalid completion range")
 		e.buffer.ClearUI()
 		e.state = stateIdle
 		return
@@ -1627,7 +1581,6 @@ func (e *Engine) handleTokenStreamComplete() {
 	if e.processCompletion(completion) {
 		e.state = stateHasCompletion
 	} else {
-		logger.Debug("token stream complete: processCompletion returned false")
 		e.buffer.ClearUI()
 		e.state = stateIdle
 	}

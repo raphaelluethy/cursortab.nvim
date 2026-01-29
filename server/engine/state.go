@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"cursortab/logger"
 	"cursortab/types"
 )
 
@@ -122,7 +121,6 @@ func findTransition(from state, event EventType) *Transition {
 func (e *Engine) dispatch(event Event) bool {
 	t := findTransition(e.state, event.Type)
 	if t == nil {
-		logger.Debug("no handler: state=%s event=%s", e.state, event.Type)
 		return false
 	}
 	if t.Action != nil {
@@ -231,19 +229,16 @@ func (e *Engine) doRejectStreamingAndDebounce(event Event) {
 		if matches {
 			if hasRemaining {
 				// Typing matches - keep completion state
-				logger.Debug("token stream: typing matches partial, keeping completion")
 				e.state = stateHasCompletion
 				return
 			}
 			// User typed everything
-			logger.Debug("token stream: typing matches partial, fully typed")
 			e.clearAll()
 			e.state = stateIdle
 			e.startTextChangeTimer()
 			return
 		}
 		// Doesn't match - reject
-		logger.Debug("token stream: typing doesn't match partial, rejecting")
 		e.reject()
 		e.startTextChangeTimer()
 		return
@@ -260,19 +255,16 @@ func (e *Engine) doRejectStreamingAndDebounce(event Event) {
 		if matches {
 			if hasRemaining {
 				// Typing matches - keep completion state
-				logger.Debug("line stream: typing matches partial, keeping completion")
 				e.state = stateHasCompletion
 				return
 			}
 			// User typed everything
-			logger.Debug("line stream: typing matches partial, fully typed")
 			e.clearAll()
 			e.state = stateIdle
 			e.startTextChangeTimer()
 			return
 		}
 		// Doesn't match - reject
-		logger.Debug("line stream: typing doesn't match partial, rejecting")
 		e.reject()
 		e.startTextChangeTimer()
 		return
