@@ -1315,6 +1315,25 @@ func (e *Engine) cancelStreaming() {
 	e.tokenStreamingState = nil
 }
 
+// cancelTokenStreamingKeepPartial cancels token streaming but preserves the partial
+// completion state (completions and completionOriginalLines) for typing match validation.
+// Used when user types during token streaming to check if typing matches partial result.
+func (e *Engine) cancelTokenStreamingKeepPartial() {
+	if e.tokenStreamChan != nil {
+		logger.Debug("token stream cancelling (keeping partial)")
+	}
+	// Clear channel first - stops event loop from reading
+	e.tokenStreamChan = nil
+	// Cancel the HTTP request
+	if e.streamingCancel != nil {
+		e.streamingCancel()
+		e.streamingCancel = nil
+	}
+	// Clear streaming state but keep completions and completionOriginalLines
+	// These were populated by handleTokenChunk and are needed for checkTypingMatchesPrediction
+	e.tokenStreamingState = nil
+}
+
 // handleStreamLine processes a line received from the streaming provider.
 // Caller must verify stream ID matches before calling.
 func (e *Engine) handleStreamLine(line string) {

@@ -3,7 +3,6 @@ package text
 import (
 	"cursortab/assert"
 	"fmt"
-	"sort"
 	"testing"
 )
 
@@ -65,7 +64,7 @@ func TestJoinLines(t *testing.T) {
 }
 
 func TestCreateStages_PureAdditionsPreservesEmptyLines(t *testing.T) {
-	// Reproduces bug: empty lines between additions were being lost in staging
+	// Verifies empty lines between additions are preserved in staging
 	oldLines := []string{"import numpy as np", ""}
 	newLines := []string{"import numpy as np", "", "def f1():", "    pass", "", "def f2():", "    pass"}
 
@@ -73,26 +72,12 @@ func TestCreateStages_PureAdditionsPreservesEmptyLines(t *testing.T) {
 	text2 := JoinLines(newLines)
 	diff := ComputeDiff(text1, text2)
 
-	t.Logf("Diff changes: %d", len(diff.Changes))
-	for lineNum, change := range diff.Changes {
-		t.Logf("  Line %d: Type=%v, Content=%q", lineNum, change.Type, change.Content)
-	}
-
 	result := CreateStages(diff, 1, 1, 50, 1, 3, "test.py", newLines, oldLines)
 
 	assert.NotNil(t, result, "result")
 	assert.True(t, len(result.Stages) >= 1, "should have at least 1 stage")
 
 	stage := result.Stages[0]
-	t.Logf("Stage: BufferStart=%d, BufferEnd=%d, Lines=%d", stage.BufferStart, stage.BufferEnd, len(stage.Lines))
-	t.Logf("Stage Changes: %d", len(stage.Changes))
-	for lineNum, change := range stage.Changes {
-		t.Logf("  Stage Line %d: Type=%v, Content=%q", lineNum, change.Type, change.Content)
-	}
-	t.Logf("Stage Groups: %d", len(stage.Groups))
-	for i, g := range stage.Groups {
-		t.Logf("  Group %d: Type=%s, StartLine=%d, EndLine=%d, Lines=%v", i, g.Type, g.StartLine, g.EndLine, g.Lines)
-	}
 
 	// Stage should have 5 changes (lines 3-7 of new text = stage lines 1-5)
 	assert.Equal(t, 5, len(stage.Changes), "stage should have 5 changes")
@@ -113,8 +98,8 @@ func TestCreateStages_PureAdditionsPreservesEmptyLines(t *testing.T) {
 	assert.Equal(t, 5, totalLinesInGroups, "groups should cover all 5 lines")
 }
 
-func TestCreateStages_ExactProductionScenario(t *testing.T) {
-	// Exact reproduction of the bug from production log
+func TestCreateStages_MultipleAdditionsWithEmptyLineSeparators(t *testing.T) {
+	// Multiple function additions separated by empty lines
 	// Buffer: ["import numpy as np", ""] (2 lines)
 	// Completion: 10 lines with 3 functions separated by empty lines
 	oldLines := []string{"import numpy as np", ""}
@@ -133,24 +118,8 @@ func TestCreateStages_ExactProductionScenario(t *testing.T) {
 
 	text1 := JoinLines(oldLines)
 	text2 := JoinLines(newLines)
-	t.Logf("text1 (len=%d): %q", len(text1), text1)
-	t.Logf("text2 (len=%d): %q", len(text2), text2)
 
 	diff := ComputeDiff(text1, text2)
-
-	t.Logf("Diff: OldLineCount=%d, NewLineCount=%d, Changes=%d", diff.OldLineCount, diff.NewLineCount, len(diff.Changes))
-
-	// Print changes sorted by key
-	keys := make([]int, 0, len(diff.Changes))
-	for k := range diff.Changes {
-		keys = append(keys, k)
-	}
-	sort.Ints(keys)
-	for _, lineNum := range keys {
-		change := diff.Changes[lineNum]
-		t.Logf("  Change[%d]: Type=%v, NewLineNum=%d, OldLineNum=%d, Content=%q",
-			lineNum, change.Type, change.NewLineNum, change.OldLineNum, change.Content)
-	}
 
 	// Should have 8 additions (lines 3-10), lines 1-2 are equal
 	assert.Equal(t, 8, len(diff.Changes), "should have 8 additions")
@@ -162,14 +131,6 @@ func TestCreateStages_ExactProductionScenario(t *testing.T) {
 	assert.True(t, len(result.Stages) >= 1, "should have at least 1 stage")
 
 	stage := result.Stages[0]
-	t.Logf("Stage: BufferStart=%d, BufferEnd=%d, Lines=%d, Changes=%d, Groups=%d",
-		stage.BufferStart, stage.BufferEnd, len(stage.Lines), len(stage.Changes), len(stage.Groups))
-	for lineNum, change := range stage.Changes {
-		t.Logf("  Stage Line %d: Type=%v, Content=%q", lineNum, change.Type, change.Content)
-	}
-	for i, g := range stage.Groups {
-		t.Logf("  Group %d: Type=%s, StartLine=%d, EndLine=%d, LinesCount=%d", i, g.Type, g.StartLine, g.EndLine, len(g.Lines))
-	}
 
 	// Stage should have 8 changes (additions at lines 3-10)
 	assert.Equal(t, 8, len(stage.Changes), "stage should have 8 changes")
@@ -462,10 +423,6 @@ func TestGroupChangesIntoStages_EmptyInput(t *testing.T) {
 	assert.Nil(t, stages, "stages for empty input")
 }
 
-// =============================================================================
-// Tests for staging with unequal line counts
-// =============================================================================
-
 func TestCreateStages_WithInsertions(t *testing.T) {
 	// Test staging when completion adds lines (net line increase)
 	// Old: 3 lines, New: 5 lines (2 insertions at different locations)
@@ -627,10 +584,6 @@ func TestGetStageBufferRange_WithInsertions(t *testing.T) {
 	assert.True(t, start <= end, fmt.Sprintf("invalid range: start=%d > end=%d", start, end))
 }
 
-// =============================================================================
-// Edge case tests for staging with extreme coordinate scenarios
-// =============================================================================
-
 func TestGetBufferLineForChange_DeletionAtLine1(t *testing.T) {
 	// Edge case: deletion at line 1 with no preceding anchor
 	mapping := &LineMapping{
@@ -774,10 +727,6 @@ func TestGetStageBufferRange_AllInsertions(t *testing.T) {
 	assert.Equal(t, 2, start, "pure additions with mapping anchor: insertion point is anchor + 1")
 }
 
-// =============================================================================
-// Tests for group bounds validation
-// =============================================================================
-
 func TestStageGroups_ShouldNotExceedStageContent(t *testing.T) {
 	// Stage's groups should only reference lines within the stage's content.
 	changes := make(map[int]LineChange)
@@ -841,10 +790,6 @@ func TestStageGroups_ShouldNotExceedStageContent(t *testing.T) {
 		}
 	}
 }
-
-// =============================================================================
-// Tests for additions at end of file: buffer range should extend to end of original
-// =============================================================================
 
 func TestGetStageBufferRange_AdditionsAtEndOfFile(t *testing.T) {
 	// When a stage contains additions that extend beyond the original buffer,
@@ -1053,10 +998,6 @@ func TestGetStageBufferRange_OnlyAdditionsBeyondBuffer(t *testing.T) {
 	assert.Equal(t, 11, startLine, "buffer start should be insertion point (anchor + 1)")
 	assert.Equal(t, 11, endLine, "buffer end equals start for pure additions")
 }
-
-// =============================================================================
-// Edge case tests from code review
-// =============================================================================
 
 func TestCreateStages_EmptyNewLines(t *testing.T) {
 	// Edge case: newLines slice is empty but diff has changes

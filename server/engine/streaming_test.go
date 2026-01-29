@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"cursortab/assert"
 	"sync"
 	"testing"
 	"time"
@@ -62,9 +63,7 @@ func TestStreamContaminationPrevention(t *testing.T) {
 	// Process them
 	for range 2 {
 		line := <-stream1.lines
-		if !processLine(stream1.lines, line) {
-			t.Errorf("Stream 1 line should have been processed: %s", line)
-		}
+		assert.True(t, processLine(stream1.lines, line), "stream 1 line should have been processed: "+line)
 	}
 
 	// Now "cancel" stream 1 and start stream 2
@@ -85,17 +84,13 @@ func TestStreamContaminationPrevention(t *testing.T) {
 	// Now try to process stream 1's stale lines - they should be rejected
 	for range 2 {
 		line := <-stream1.lines
-		if processLine(stream1.lines, line) {
-			t.Errorf("Stale stream 1 line should have been rejected: %s", line)
-		}
+		assert.False(t, processLine(stream1.lines, line), "stale stream 1 line should have been rejected: "+line)
 	}
 
 	// Process stream 2's lines - they should succeed
 	for range 2 {
 		line := <-stream2.lines
-		if !processLine(stream2.lines, line) {
-			t.Errorf("Stream 2 line should have been processed: %s", line)
-		}
+		assert.True(t, processLine(stream2.lines, line), "stream 2 line should have been processed: "+line)
 	}
 
 	// Verify only the correct lines were processed
@@ -103,14 +98,9 @@ func TestStreamContaminationPrevention(t *testing.T) {
 	defer mu.Unlock()
 
 	expected := []string{"stream1-line1", "stream1-line2", "stream2-line1", "stream2-line2"}
-	if len(processedLines) != len(expected) {
-		t.Errorf("Expected %d processed lines, got %d: %v", len(expected), len(processedLines), processedLines)
-		return
-	}
+	assert.Equal(t, len(expected), len(processedLines), "processed lines count")
 	for i, line := range processedLines {
-		if line != expected[i] {
-			t.Errorf("Line %d: expected %q, got %q", i, expected[i], line)
-		}
+		assert.Equal(t, expected[i], line, "line "+string(rune(i)))
 	}
 }
 
@@ -132,9 +122,7 @@ func TestStreamChannelNilPreventsSelection(t *testing.T) {
 		selected = "other"
 	}
 
-	if selected != "other" {
-		t.Errorf("Expected 'other' to be selected, got %q", selected)
-	}
+	assert.Equal(t, "other", selected, "select should choose other")
 }
 
 // TestRapidStreamSwitching tests rapid stream cancellation and restart
@@ -164,11 +152,9 @@ func TestRapidStreamSwitching(t *testing.T) {
 			}
 			mu.Unlock()
 		case <-time.After(10 * time.Millisecond):
-			t.Error("Timeout waiting for line")
+			assert.True(t, false, "Timeout waiting for line")
 		}
 	}
 
-	if processedCount != 10 {
-		t.Errorf("Expected 10 processed lines, got %d", processedCount)
-	}
+	assert.Equal(t, 10, processedCount, "processed count")
 }

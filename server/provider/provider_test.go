@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"cursortab/assert"
 	"testing"
 )
 
@@ -14,17 +15,11 @@ func TestContext_TrimmedContextInterface(t *testing.T) {
 	}
 
 	// These methods should exist and return correct values
-	if ctx.GetWindowStart() != 20 {
-		t.Errorf("GetWindowStart() = %d, expected 20", ctx.GetWindowStart())
-	}
+	assert.Equal(t, 20, ctx.GetWindowStart(), "GetWindowStart")
 
 	lines := ctx.GetTrimmedLines()
-	if len(lines) != 3 {
-		t.Errorf("GetTrimmedLines() length = %d, expected 3", len(lines))
-	}
-	if lines[0] != "line 1" {
-		t.Errorf("GetTrimmedLines()[0] = %q, expected %q", lines[0], "line 1")
-	}
+	assert.Equal(t, 3, len(lines), "GetTrimmedLines length")
+	assert.Equal(t, "line 1", lines[0], "GetTrimmedLines[0]")
 }
 
 // TestContext_EmptyTrimmedLines verifies behavior when no trimming occurred.
@@ -34,12 +29,8 @@ func TestContext_EmptyTrimmedLines(t *testing.T) {
 		TrimmedLines: nil,
 	}
 
-	if ctx.GetWindowStart() != 0 {
-		t.Errorf("GetWindowStart() = %d, expected 0", ctx.GetWindowStart())
-	}
+	assert.Equal(t, 0, ctx.GetWindowStart(), "GetWindowStart")
 
 	lines := ctx.GetTrimmedLines()
-	if lines != nil {
-		t.Errorf("GetTrimmedLines() should be nil when not trimmed")
-	}
+	assert.Nil(t, lines, "GetTrimmedLines should be nil")
 }
