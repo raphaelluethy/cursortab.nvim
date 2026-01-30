@@ -10,6 +10,8 @@ import (
 	"os"
 	"time"
 
+	"github.com/andybalholm/brotli"
+
 	"cursortab/logger"
 )
 
@@ -65,20 +67,35 @@ func getEnvVarName(apiKeyEnv string) string {
 func (c *Client) DoAutocomplete(ctx context.Context, req *AutocompleteRequest) (*AutocompleteResponse, error) {
 	defer logger.Trace("sweep.DoAutocomplete")()
 
-	body, err := json.Marshal(req)
+	jsonBody, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+DefaultAutocompletePath, bytes.NewReader(body))
+	// Compress with Brotli (quality 1, window size 22 - same as Zed)
+	var compressedBody bytes.Buffer
+	brotliWriter := brotli.NewWriterOptions(&compressedBody, brotli.WriterOptions{
+		Quality: 1,
+		LGWin:   22,
+	})
+	if _, err := brotliWriter.Write(jsonBody); err != nil {
+		return nil, fmt.Errorf("failed to compress request: %w", err)
+	}
+	if err := brotliWriter.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close brotli writer: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.BaseURL+DefaultAutocompletePath, &compressedBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
+	httpReq.Header.Set("Connection", "keep-alive")
+	httpReq.Header.Set("Content-Encoding", "br")
 
-	logger.Debug("sweep autocomplete request: URL=%s, file_path=%s", c.BaseURL+DefaultAutocompletePath, req.FilePath)
+	logger.Debug("sweep autocomplete request: URL=%s, file_path=%s, body_len=%d, compressed_len=%d", c.BaseURL+DefaultAutocompletePath, req.FilePath, len(jsonBody), compressedBody.Len())
 
 	resp, err := c.HTTPClient.Do(httpReq)
 	if err != nil {

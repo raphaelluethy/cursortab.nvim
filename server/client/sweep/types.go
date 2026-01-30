@@ -5,7 +5,7 @@ package sweep
 type AutocompleteRequest struct {
 	DebugInfo            string       `json:"debug_info"`
 	RepoName             string       `json:"repo_name"`
-	Branch               *string      `json:"branch,omitempty"`
+	Branch               *string      `json:"branch"`
 	FilePath             string       `json:"file_path"`
 	FileContents         string       `json:"file_contents"`
 	RecentChanges        string       `json:"recent_changes"`
