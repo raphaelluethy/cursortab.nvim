@@ -66,26 +66,26 @@ var transitions = []Transition{
 
 	// From statePendingCompletion
 	{statePendingCompletion, EventTextChanged, (*Engine).doTextChangePending},
-	{statePendingCompletion, EventEsc, (*Engine).doReject},
+	{statePendingCompletion, EventEsc, (*Engine).doRejectAndStartIdleTimer},
 	{statePendingCompletion, EventInsertLeave, (*Engine).doRejectAndStartIdleTimer},
 	{statePendingCompletion, EventCursorMovedNormal, (*Engine).doResetIdleTimer},
 
 	// From stateHasCompletion
 	{stateHasCompletion, EventTab, (*Engine).doAcceptCompletion},
-	{stateHasCompletion, EventEsc, (*Engine).doReject},
+	{stateHasCompletion, EventEsc, (*Engine).doRejectAndStartIdleTimer},
 	{stateHasCompletion, EventTextChanged, (*Engine).doTextChangeWithCompletion},
 	{stateHasCompletion, EventInsertLeave, (*Engine).doRejectAndStartIdleTimer},
 	{stateHasCompletion, EventCursorMovedNormal, (*Engine).doResetIdleTimer},
 
 	// From stateHasCursorTarget
 	{stateHasCursorTarget, EventTab, (*Engine).doAcceptCursorTarget},
-	{stateHasCursorTarget, EventEsc, (*Engine).doReject},
+	{stateHasCursorTarget, EventEsc, (*Engine).doRejectAndStartIdleTimer},
 	{stateHasCursorTarget, EventTextChanged, (*Engine).doRejectAndDebounce},
 	{stateHasCursorTarget, EventInsertLeave, (*Engine).doRejectAndStartIdleTimer},
 	{stateHasCursorTarget, EventCursorMovedNormal, (*Engine).doResetIdleTimer},
 
 	// From stateStreamingCompletion
-	{stateStreamingCompletion, EventEsc, (*Engine).doRejectStreaming},
+	{stateStreamingCompletion, EventEsc, (*Engine).doRejectStreamingAndStartIdleTimer},
 	{stateStreamingCompletion, EventTextChanged, (*Engine).doRejectStreamingAndDebounce},
 	{stateStreamingCompletion, EventInsertLeave, (*Engine).doRejectStreamingAndStartIdleTimer},
 	{stateStreamingCompletion, EventCursorMovedNormal, (*Engine).doResetIdleTimer},

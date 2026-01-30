@@ -27,22 +27,14 @@
 ---@field text_change_debounce integer
 ---@field cursor_prediction CursortabCursorPredictionConfig
 
----@class CursortabFIMTokensConfig
----@field prefix string FIM prefix token (e.g., "<|fim_prefix|>")
----@field suffix string FIM suffix token (e.g., "<|fim_suffix|>")
----@field middle string FIM middle token (e.g., "<|fim_middle|>")
-
 ---@class CursortabProviderConfig
 ---@field type string
 ---@field url string
----@field model string
 ---@field temperature number
 ---@field max_tokens integer Max tokens to generate (also used to derive input context size)
 ---@field top_k integer
 ---@field completion_timeout integer
 ---@field max_diff_history_tokens integer
----@field completion_path string API endpoint path (e.g., "/v1/completions")
----@field fim_tokens CursortabFIMTokensConfig|nil FIM tokens configuration (optional)
 ---@field api_key string|nil API key for hosted providers (e.g., Sweep)
 ---@field api_key_env string Environment variable name for API key (default: "SWEEP_AI_TOKEN")
 
@@ -90,20 +82,13 @@ local default_config = {
 	},
 
 	provider = {
-		type = "inline", -- "inline", "fim", "sweep", or "zeta"
-		url = "http://localhost:8000", -- URL of the provider server
-		model = "", -- Model name
+		type = "sweep", -- "sweep" (hosted)
+		url = "https://autocomplete.sweep.dev", -- Hosted Sweep base URL
 		temperature = 0.0, -- Sampling temperature
 		max_tokens = 512, -- Max tokens to generate
 		top_k = 50, -- Top-k sampling
 		completion_timeout = 5000, -- Timeout in ms for completion requests
 		max_diff_history_tokens = 512, -- Max tokens for diff history (0 = no limit)
-		completion_path = "/v1/completions", -- API endpoint path
-		fim_tokens = { -- FIM tokens (for FIM provider)
-			prefix = "<|fim_prefix|>",
-			suffix = "<|fim_suffix|>",
-			middle = "<|fim_middle|>",
-		},
 		api_key = nil, -- API key for hosted providers (nil to use env var)
 		api_key_env = "SWEEP_AI_TOKEN", -- Environment variable name for API key
 	},
@@ -135,7 +120,7 @@ local deprecated_mappings = {
 	-- Provider (old -> new)
 	provider = { "provider", "type" },
 	provider_url = { "provider", "url" },
-	provider_model = { "provider", "model" },
+	provider_model = nil, -- Removed
 	provider_temperature = { "provider", "temperature" },
 	provider_max_tokens = { "provider", "max_tokens" },
 	provider_top_k = { "provider", "top_k" },
@@ -253,7 +238,7 @@ local function migrate_deprecated_config(user_config)
 end
 
 -- Valid values for enum-like config options
-local valid_provider_types = { inline = true, fim = true, sweep = true, zeta = true }
+local valid_provider_types = { sweep = true }
 local valid_log_levels = { trace = true, debug = true, info = true, warn = true, error = true }
 
 -- Validate configuration values
@@ -263,7 +248,7 @@ local function validate_config(cfg)
 	if cfg.provider and cfg.provider.type then
 		if not valid_provider_types[cfg.provider.type] then
 			error(string.format(
-				"[cursortab.nvim] Invalid provider.type '%s'. Must be one of: inline, fim, sweep, zeta",
+				"[cursortab.nvim] Invalid provider.type '%s'. Must be 'sweep'",
 				cfg.provider.type
 			))
 		end
@@ -306,24 +291,7 @@ local function validate_config(cfg)
 				)
 			end)
 		end
-		if cfg.provider.completion_path and not cfg.provider.completion_path:match("^/") then
-			error("[cursortab.nvim] provider.completion_path must start with '/'")
-		end
-		if cfg.provider.fim_tokens ~= nil then
-			if type(cfg.provider.fim_tokens) ~= "table" then
-				error("[cursortab.nvim] provider.fim_tokens must be a table with prefix, suffix, and middle fields")
-			end
-			local required_fields = { "prefix", "suffix", "middle" }
-			for _, field in ipairs(required_fields) do
-				local value = cfg.provider.fim_tokens[field]
-				if value == nil or type(value) ~= "string" or value == "" then
-					error(string.format(
-						"[cursortab.nvim] provider.fim_tokens.%s is required and must be a non-empty string",
-						field
-					))
-				end
-			end
-		end
+
 	end
 end
 

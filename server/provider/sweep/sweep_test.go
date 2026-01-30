@@ -1,240 +1,80 @@
 package sweep
 
 import (
+	"context"
 	"cursortab/assert"
-	"cursortab/client/openai"
-	"cursortab/provider"
+	clientSweep "cursortab/client/sweep"
 	"cursortab/types"
-	"strings"
 	"testing"
 )
 
-func TestBuildPrompt_EmptyLines(t *testing.T) {
-	config := &types.ProviderConfig{
-		ProviderModel: "test-model",
-	}
-	p := NewProvider(config)
+type fakeSweepClient struct {
+	resp *clientSweep.AutocompleteResponse
+	err  error
 
-	ctx := &provider.Context{
-		Request: &types.CompletionRequest{
-			FilePath: "main.go",
-			Lines:    []string{},
-		},
-		TrimmedLines: []string{},
-	}
-
-	req := p.PromptBuilder(p, ctx)
-
-	assert.True(t, strings.Contains(req.Prompt, "<|file_sep|>original/main.go"), "should have original marker")
-	assert.True(t, strings.Contains(req.Prompt, "<|file_sep|>current/main.go"), "should have current marker")
-	assert.True(t, strings.Contains(req.Prompt, "<|file_sep|>updated/main.go"), "should have updated marker")
+	lastReq *clientSweep.AutocompleteRequest
 }
 
-func TestBuildPrompt_WithContent(t *testing.T) {
-	config := &types.ProviderConfig{
-		ProviderModel: "test-model",
-	}
-	p := NewProvider(config)
-
-	ctx := &provider.Context{
-		Request: &types.CompletionRequest{
-			FilePath: "main.go",
-			Lines:    []string{"line 1", "line 2"},
-		},
-		TrimmedLines: []string{"line 1", "line 2"},
-		WindowStart:  0,
-		WindowEnd:    2,
-	}
-
-	req := p.PromptBuilder(p, ctx)
-
-	assert.True(t, strings.Contains(req.Prompt, "line 1\nline 2"), "should contain file content")
+func (f *fakeSweepClient) DoAutocomplete(_ context.Context, req *clientSweep.AutocompleteRequest) (*clientSweep.AutocompleteResponse, error) {
+	f.lastReq = req
+	return f.resp, f.err
 }
 
-func TestBuildPrompt_WithDiffHistory(t *testing.T) {
-	config := &types.ProviderConfig{
-		ProviderModel: "test-model",
-	}
-	p := NewProvider(config)
-
-	ctx := &provider.Context{
-		Request: &types.CompletionRequest{
-			FilePath: "main.go",
-			Lines:    []string{"line 1"},
-			FileDiffHistories: []*types.FileDiffHistory{
-				{
-					FileName: "other.go",
-					DiffHistory: []*types.DiffEntry{
-						{Original: "old code", Updated: "new code"},
-					},
+func TestBuildRecentChanges(t *testing.T) {
+	req := &types.CompletionRequest{
+		FileDiffHistories: []*types.FileDiffHistory{
+			{
+				FileName: "other.go",
+				DiffHistory: []*types.DiffEntry{
+					{Original: "old", Updated: "new"},
 				},
 			},
 		},
-		TrimmedLines: []string{"line 1"},
-		WindowStart:  0,
-		WindowEnd:    1,
 	}
 
-	req := p.PromptBuilder(p, ctx)
-
-	assert.True(t, strings.Contains(req.Prompt, "other.go.diff"), "should have diff section")
-	assert.True(t, strings.Contains(req.Prompt, "original:\nold code"), "should have original in diff")
-	assert.True(t, strings.Contains(req.Prompt, "updated:\nnew code"), "should have updated in diff")
+	changes := buildRecentChanges(req)
+	assert.True(t, changes != "", "should build changes")
+	assert.True(t, changes == "File: other.go:\n-old\n+new\n", "should match expected format")
 }
 
-func TestGetTrimmedOriginalContent(t *testing.T) {
-	tests := []struct {
-		name        string
-		req         *types.CompletionRequest
-		trimOffset  int
-		lineCount   int
-		wantLen     int
-		wantContent string
-	}{
-		{
-			name: "uses previous lines",
-			req: &types.CompletionRequest{
-				PreviousLines: []string{"prev 1", "prev 2", "prev 3"},
-				Lines:         []string{"curr 1", "curr 2"},
-			},
-			trimOffset:  0,
-			lineCount:   3,
-			wantLen:     3,
-			wantContent: "prev 1",
-		},
-		{
-			name: "falls back to lines",
-			req: &types.CompletionRequest{
-				PreviousLines: nil,
-				Lines:         []string{"curr 1", "curr 2"},
-			},
-			trimOffset:  0,
-			lineCount:   2,
-			wantLen:     2,
-			wantContent: "curr 1",
-		},
-		{
-			name: "respects window",
-			req: &types.CompletionRequest{
-				Lines: []string{"line 0", "line 1", "line 2", "line 3"},
-			},
-			trimOffset:  1,
-			lineCount:   2,
-			wantLen:     2,
-			wantContent: "line 1",
-		},
-		{
-			name: "handles out of bounds",
-			req: &types.CompletionRequest{
-				Lines: []string{"line 0"},
-			},
-			trimOffset:  5,
-			lineCount:   2,
-			wantLen:     0,
-			wantContent: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := getTrimmedOriginalContent(tt.req, tt.trimOffset, tt.lineCount)
-			assert.Equal(t, tt.wantLen, len(result), "length")
-			if tt.wantLen > 0 {
-				assert.Equal(t, tt.wantContent, result[0], "first element")
-			}
-		})
-	}
+func TestExtractRepoName(t *testing.T) {
+	assert.Equal(t, "repo", extractRepoName("/home/me/repo/src/main.go"), "src parent")
+	assert.Equal(t, "repo", extractRepoName("/home/me/repo/lib/x.go"), "lib parent")
+	assert.Equal(t, "repo", extractRepoName("/home/me/repo/pkg/x.go"), "pkg parent")
+	assert.Equal(t, "repo", extractRepoName("/home/me/repo/main.go"), "fallback parent")
 }
 
-func TestParseCompletion_NoChange(t *testing.T) {
-	config := &types.ProviderConfig{
-		ProviderModel: "test-model",
-	}
-	p := NewProvider(config)
+func TestGetCompletion_ReplacesBytesAndBuildsLineRange(t *testing.T) {
+	fc := &fakeSweepClient{resp: &clientSweep.AutocompleteResponse{Completion: "B2", StartIndex: 2, EndIndex: 3}}
+	p := &hostedProvider{cfg: &types.ProviderConfig{}, client: fc}
 
-	ctx := &provider.Context{
-		Request: &types.CompletionRequest{
-			Lines: []string{"line 1", "line 2"},
-		},
-		Result: &openai.StreamResult{
-			Text: "line 1\nline 2", // Same as original
-		},
-		WindowStart: 0,
-		WindowEnd:   2,
-	}
+	resp, err := p.GetCompletion(context.Background(), &types.CompletionRequest{
+		FilePath:    "/home/me/repo/src/main.go",
+		Lines:       []string{"a", "b", "c"},
+		CursorRow:   2,
+		CursorCol:   0,
+		WorkspaceID: "",
+	})
+	assert.Nil(t, err, "no error")
+	assert.Equal(t, 1, len(resp.Completions), "one completion")
+	assert.Equal(t, 2, resp.Completions[0].StartLine, "start line")
+	assert.Equal(t, 2, resp.Completions[0].EndLineInc, "end line inc")
+	assert.Equal(t, "B2", resp.Completions[0].Lines[0], "replacement")
 
-	resp, ok := parseCompletion(p, ctx)
-
-	assert.True(t, ok, "should succeed")
-	assert.Nil(t, resp.Completions, "no completions when text is same")
+	assert.Equal(t, true, fc.lastReq.UseBytes, "must request byte offsets")
 }
 
-func TestParseCompletion_WithChange(t *testing.T) {
-	config := &types.ProviderConfig{
-		ProviderModel: "test-model",
-	}
-	p := NewProvider(config)
+func TestGetCompletion_NoOpReturnsEmpty(t *testing.T) {
+	// Replace "b" with "b" -> no change
+	fc := &fakeSweepClient{resp: &clientSweep.AutocompleteResponse{Completion: "b", StartIndex: 2, EndIndex: 3}}
+	p := &hostedProvider{cfg: &types.ProviderConfig{}, client: fc}
 
-	ctx := &provider.Context{
-		Request: &types.CompletionRequest{
-			Lines: []string{"line 1", "line 2"},
-		},
-		Result: &openai.StreamResult{
-			Text: "line 1\nmodified line 2",
-		},
-		WindowStart: 0,
-		WindowEnd:   2,
-	}
-
-	resp, ok := parseCompletion(p, ctx)
-
-	assert.True(t, ok, "should succeed")
-	assert.NotNil(t, resp, "should have response")
-	assert.True(t, len(resp.Completions) > 0, "should have completions")
-}
-
-func TestParseCompletion_StripsStopTokens(t *testing.T) {
-	config := &types.ProviderConfig{
-		ProviderModel: "test-model",
-	}
-	p := NewProvider(config)
-
-	ctx := &provider.Context{
-		Request: &types.CompletionRequest{
-			Lines: []string{"line 1"},
-		},
-		Result: &openai.StreamResult{
-			Text: "modified line 1<|file_sep|>",
-		},
-		WindowStart: 0,
-		WindowEnd:   1,
-	}
-
-	resp, ok := parseCompletion(p, ctx)
-
-	assert.True(t, ok, "should succeed")
-	assert.NotNil(t, resp, "should have response")
-}
-
-func TestParseCompletion_InvalidWindow(t *testing.T) {
-	config := &types.ProviderConfig{
-		ProviderModel: "test-model",
-	}
-	p := NewProvider(config)
-
-	ctx := &provider.Context{
-		Request: &types.CompletionRequest{
-			Lines: []string{"line 1"},
-		},
-		Result: &openai.StreamResult{
-			Text: "modified",
-		},
-		WindowStart: 5, // Invalid
-		WindowEnd:   2,
-	}
-
-	resp, ok := parseCompletion(p, ctx)
-
-	assert.True(t, ok, "should succeed but return empty")
-	assert.Nil(t, resp.Completions, "should have no completions for invalid window")
+	resp, err := p.GetCompletion(context.Background(), &types.CompletionRequest{
+		FilePath:  "main.go",
+		Lines:     []string{"a", "b", "c"},
+		CursorRow: 1,
+		CursorCol: 0,
+	})
+	assert.Nil(t, err, "no error")
+	assert.Equal(t, 0, len(resp.Completions), "no completions")
 }

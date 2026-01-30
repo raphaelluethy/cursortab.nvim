@@ -1,7 +1,7 @@
 # cursortab.nvim
 
-A Neovim plugin that provides local edit completions and cursor predictions.
-Currently supports custom models and models form Zeta (Zed) and SweepAI.
+A Neovim plugin that provides AI-powered edit completions and cursor predictions
+using the Sweep hosted API.
 
 > [!WARNING]
 >
@@ -19,11 +19,6 @@ Currently supports custom models and models form Zeta (Zed) and SweepAI.
   * [Using lazy.nvim](#using-lazynvim)
   * [Using packer.nvim](#using-packernvim)
 * [Configuration](#configuration)
-  * [Providers](#providers)
-    * [Inline Provider (Default)](#inline-provider-default)
-    * [FIM Provider](#fim-provider)
-    * [Sweep Provider](#sweep-provider)
-    * [Zeta Provider](#zeta-provider)
 * [Usage](#usage)
   * [Commands](#commands)
 * [Development](#development)
@@ -70,6 +65,14 @@ use {
 
 ## Configuration
 
+Before using the plugin, you need to set up authentication with the Sweep API:
+
+```bash
+export SWEEP_AI_TOKEN="your-api-key-here"
+```
+
+Then configure the plugin:
+
 ```lua
 require("cursortab").setup({
   enabled = true,
@@ -83,7 +86,7 @@ require("cursortab").setup({
       completion = "#80899c",    -- Foreground color for completions
     },
     jump = {
-      symbol = "",              -- Symbol shown for jump points
+      symbol = "",              -- Symbol shown for jump points
       text = " TAB ",            -- Text displayed after jump symbol
       show_distance = true,      -- Show line distance for off-screen jumps
       bg_color = "#373b45",      -- Jump text background color
@@ -102,20 +105,15 @@ require("cursortab").setup({
   },
 
   provider = {
-    type = "inline",                      -- Provider: "inline", "fim", "sweep", or "zeta"
-    url = "http://localhost:8000",        -- URL of the provider server
-    model = "",                           -- Model name
-    temperature = 0.0,                    -- Sampling temperature
-    max_tokens = 512,                     -- Max tokens to generate
-    top_k = 50,                           -- Top-k sampling
-    completion_timeout = 5000,            -- Timeout in ms for completion requests
-    max_diff_history_tokens = 512,        -- Max tokens for diff history (0 = no limit)
-    completion_path = "/v1/completions",  -- API endpoint path
-    fim_tokens = {                        -- FIM tokens (for FIM provider)
-      prefix = "<|fim_prefix|>",
-      suffix = "<|fim_suffix|>",
-      middle = "<|fim_middle|>",
-    },
+    type = "sweep",
+    url = "https://autocomplete.sweep.dev",
+    temperature = 0.0,
+    max_tokens = 512,
+    top_k = 50,
+    completion_timeout = 5000,
+    max_diff_history_tokens = 512,
+    api_key = nil,                -- API key (nil to use env var)
+    api_key_env = "SWEEP_AI_TOKEN",
   },
 
   debug = {
@@ -126,171 +124,11 @@ require("cursortab").setup({
 
 For detailed configuration documentation, see `:help cursortab-config`.
 
-### Providers
-
-The plugin supports four AI provider backends: Inline, FIM, Sweep, and Zeta.
-
-| Provider | Multi-line | Multi-edit | Cursor Prediction | Model             |
-| -------- | :--------: | :--------: | :---------------: | ----------------- |
-| Inline   |            |            |                   | Any base model    |
-| FIM      |     ✓      |            |                   | Any FIM-capable   |
-| Sweep    |     ✓      |     ✓      |         ✓         | `sweep-next-edit` |
-| Zeta     |     ✓      |     ✓      |         ✓         | `zeta`            |
-
-#### Inline Provider (Default)
-
-End-of-line completion using OpenAI-compatible API endpoints. Works with any
-OpenAI-compatible `/v1/completions` endpoint.
-
-**Requirements:**
-
-- An OpenAI-compatible completions endpoint
-
-**Example Configuration:**
-
-```lua
-require("cursortab").setup({
-  provider = {
-    type = "inline",
-    url = "http://localhost:8000",
-  },
-})
-```
-
-**Example Setup:**
-
-```bash
-# Using llama.cpp
-llama-server -hf ggml-org/Qwen2.5-Coder-1.5B-Q8_0-GGUF --port 8000
-```
-
-#### FIM Provider
-
-Fill-in-the-Middle completion using standard FIM tokens. Uses both prefix
-(before cursor) and suffix (after cursor) context. Compatible with Qwen,
-DeepSeek-Coder, and similar models. Works with any OpenAI-compatible
-`/v1/completions` endpoint.
-
-**Requirements:**
-
-- An OpenAI-compatible completions endpoint with a FIM-capable model
-
-**Example Configuration:**
-
-```lua
-require("cursortab").setup({
-  provider = {
-    type = "fim",
-    url = "http://localhost:8000",
-  },
-})
-```
-
-**Example Setup:**
-
-```bash
-# Using llama.cpp with Qwen2.5-Coder 1.5B
-llama-server -hf ggml-org/Qwen2.5-Coder-1.5B-Q8_0-GGUF --port 8000
-
-# Or with Qwen 2.5 Coder 14B + 0.5B draft for speculative decoding
-llama-server \
-    -hf ggml-org/Qwen2.5-Coder-14B-Q8_0-GGUF:q8_0 \
-    -hfd ggml-org/Qwen2.5-Coder-0.5B-Q8_0-GGUF:q8_0 \
-    --port 8012 \
-    -b 1024 \
-    -ub 1024 \
-    --cache-reuse 256
-```
-
-#### Sweep Provider
-
-Sweep Next-Edit 1.5B model for fast, accurate next-edit predictions. Sends full
-file for small files, trimmed around cursor for large files.
-
-**Requirements:**
-
-- vLLM or compatible inference server (for local deployment)
-- OR a Sweep API key (for hosted deployment)
-- Sweep Next-Edit model downloaded from
-  [Hugging Face](https://huggingface.co/sweepai/sweep-next-edit-1.5b) (for local deployment)
-
-**Local Deployment:**
-
-```lua
-require("cursortab").setup({
-  provider = {
-    type = "sweep",
-    url = "http://localhost:8000",
-  },
-})
-```
-
-```bash
-# Using llama.cpp
-llama-server -hf sweepai/sweep-next-edit-1.5b-GGUF --port 8000
-
-# Or with a local GGUF file
-llama-server -m sweep-next-edit-1.5b.q8_0.v2.gguf --port 8000
-```
-
-**Hosted Deployment (Sweep Cloud):**
-
-```lua
-require("cursortab").setup({
-  provider = {
-    type = "sweep",
-    url = "https://autocomplete.sweep.dev",
-    -- API key is read from SWEEP_AI_TOKEN environment variable by default
-    -- Or you can specify it directly (not recommended):
-    -- api_key = "your-api-key-here",
-    -- Or use a custom environment variable:
-    -- api_key_env = "MY_SWEEP_KEY",
-  },
-})
-```
-
 **Authentication:**
 
-The plugin will look for the API key in this order:
+The plugin looks for the API key in this order:
 1. `api_key` config option (if set)
 2. Environment variable specified by `api_key_env` (default: `SWEEP_AI_TOKEN`)
-
-To set the environment variable:
-```bash
-export SWEEP_AI_TOKEN="your-api-key-here"
-```
-
-#### Zeta Provider
-
-Zed's Zeta model - a Qwen2.5-Coder-7B fine-tuned for edit prediction using DPO
-and SFT.
-
-**Requirements:**
-
-- vLLM or compatible inference server
-- Zeta model downloaded from
-  [Hugging Face](https://huggingface.co/zed-industries/zeta)
-
-**Example Configuration:**
-
-```lua
-require("cursortab").setup({
-  provider = {
-    type = "zeta",
-    url = "http://localhost:8000",
-    model = "zeta",
-  },
-})
-```
-
-**Example Setup:**
-
-```bash
-# Using vLLM
-vllm serve zed-industries/zeta --served-model-name zeta --port 8000
-
-# See the HuggingFace page for optimized deployment options
-```
 
 ## Usage
 
@@ -330,30 +168,19 @@ cd server && go test ./...
 ## FAQ
 
 <details>
-<summary>Which provider should I use?</summary>
-
-See the [provider feature comparison table](#providers) for capabilities. For
-the best experience, use **Sweep** with the `sweep-next-edit-1.5b` model.
-
-</details>
-
-<details>
 <summary>Why are completions slow?</summary>
 
-1. Use a smaller or more quantized model (e.g., Q4 instead of Q8)
-2. Decrease `provider.max_tokens` to reduce output length (also limits input
-   context)
+1. Decrease `provider.max_tokens` to reduce output length
+2. Check your network connection to the Sweep API
 
 </details>
 
 <details>
 <summary>Why are completions not working?</summary>
 
-1. Update to the latest version and restart the daemon with `:CursortabRestart`
-2. Increase `provider.completion_timeout` (default: 5000ms) to 10000 or more if
-   your model is slow
-3. Increase `provider.max_tokens` to give the model more surrounding context
-   (tradeoff: slower completions)
+1. Verify your `SWEEP_AI_TOKEN` environment variable is set correctly
+2. Update to the latest version and restart the daemon with `:CursortabRestart`
+3. Increase `provider.completion_timeout` (default: 5000ms) if experiencing timeouts
 
 </details>
 

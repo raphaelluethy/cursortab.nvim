@@ -44,13 +44,11 @@ type Buffer interface {
 }
 
 // Provider defines the interface that all AI providers must implement.
-// Implemented by inline.Provider, sweep.Provider, zeta.Provider.
 type Provider interface {
 	GetCompletion(ctx context.Context, req *types.CompletionRequest) (*types.CompletionResponse, error)
 }
 
 // LineStreamProvider extends Provider with line-by-line streaming capabilities.
-// For providers like sweep, zeta, fim that stream by lines.
 type LineStreamProvider interface {
 	Provider
 	// GetStreamingType returns: 0=none, 1=lines, 2=tokens
@@ -64,7 +62,6 @@ type LineStreamProvider interface {
 }
 
 // TokenStreamProvider extends Provider with token-by-token streaming capabilities.
-// For providers like inline that stream individual tokens for ghost text.
 type TokenStreamProvider interface {
 	Provider
 	// GetStreamingType returns: 0=none, 1=lines, 2=tokens
@@ -79,8 +76,8 @@ type TokenStreamProvider interface {
 // Streaming type constants
 const (
 	StreamingTypeNone   = 0 // Batch mode
-	StreamingTypeLines  = 1 // Line-by-line (sweep, zeta, fim)
-	StreamingTypeTokens = 2 // Token-by-token (inline)
+	StreamingTypeLines  = 1 // Line-by-line streaming
+	StreamingTypeTokens = 2 // Token-by-token streaming
 )
 
 // LineStream provides incremental line-by-line streaming
@@ -216,7 +213,7 @@ type Engine struct {
 	streamLinesChan <-chan string // Lines channel (nil when not streaming)
 	streamLineNum   int           // Line counter for current stream
 
-	// Token streaming state (token-by-token for inline)
+	// Token streaming state
 	tokenStreamingState *TokenStreamingState
 	tokenStreamChan     <-chan string // Token stream channel (nil when not streaming)
 
@@ -420,7 +417,7 @@ func (e *Engine) eventLoop(ctx context.Context) {
 			e.mu.Unlock()
 
 		case text, ok := <-tokenChan:
-			// Token stream handling (cumulative text for inline completion)
+			// Token stream handling (cumulative text)
 			// When tokenChan is nil, this case is never selected
 			e.mu.Lock()
 			if e.stopped {
@@ -679,7 +676,7 @@ func (e *Engine) requestStreamingCompletion(provider LineStreamProvider, req *ty
 	e.streamLineNum = 0
 }
 
-// requestTokenStreamingCompletion handles token-by-token streaming completions (inline)
+// requestTokenStreamingCompletion handles token-by-token streaming completions
 func (e *Engine) requestTokenStreamingCompletion(provider TokenStreamProvider, req *types.CompletionRequest) {
 	e.state = stateStreamingCompletion
 
@@ -1567,7 +1564,7 @@ func (e *Engine) handleTokenStreamComplete() {
 		return
 	}
 
-	// For inline provider, there's always just one completion
+	// Token streaming always produces a single completion
 	completion := resp.Completions[0]
 
 	// Validate completion is for current buffer state

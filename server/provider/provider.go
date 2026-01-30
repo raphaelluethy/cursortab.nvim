@@ -16,9 +16,9 @@ type StreamingType int
 const (
 	// StreamingNone indicates batch mode (no streaming)
 	StreamingNone StreamingType = iota
-	// StreamingLines indicates line-by-line streaming (sweep, zeta, fim)
+	// StreamingLines indicates line-by-line streaming
 	StreamingLines
-	// StreamingTokens indicates token-by-token streaming (inline)
+	// StreamingTokens indicates token-by-token streaming
 	StreamingTokens
 )
 
@@ -150,10 +150,9 @@ func (p *Provider) BuildCompletion(ctx *Context, startLine, endLineInc int, line
 }
 
 func (p *Provider) logRequest(req *openai.CompletionRequest, maxLines int) {
-	logger.Debug("%s provider request:\n  URL: %s%s\n  Model: %s\n  Temperature: %.2f\n  MaxTokens: %d\n  MaxLines: %d\n  Prompt length: %d chars\n  Prompt:\n%s",
+	logger.Debug("%s provider request:\n  URL: %s\n  Model: %s\n  Temperature: %.2f\n  MaxTokens: %d\n  MaxLines: %d\n  Prompt length: %d chars\n  Prompt:\n%s",
 		p.Name,
 		p.Config.ProviderURL,
-		p.Config.CompletionPath,
 		req.Model,
 		req.Temperature,
 		req.MaxTokens,

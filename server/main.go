@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"syscall"
 )
 
@@ -25,27 +24,17 @@ type BehaviorConfig struct {
 	CursorPrediction    CursorPredictionConfig `json:"cursor_prediction"`
 }
 
-// FIMTokensConfig holds FIM token settings
-type FIMTokensConfig struct {
-	Prefix string `json:"prefix"`
-	Suffix string `json:"suffix"`
-	Middle string `json:"middle"`
-}
-
 // ProviderConfig holds provider-specific settings
 type ProviderConfig struct {
-	Type                 string          `json:"type"` // "inline", "sweep", "zeta"
-	URL                  string          `json:"url"`
-	Model                string          `json:"model"`
-	Temperature          float64         `json:"temperature"`
-	MaxTokens            int             `json:"max_tokens"` // Max tokens to generate (also drives input trimming)
-	TopK                 int             `json:"top_k"`
-	CompletionTimeout    int             `json:"completion_timeout"` // in milliseconds
-	MaxDiffHistoryTokens int             `json:"max_diff_history_tokens"`
-	CompletionPath       string          `json:"completion_path"`
-	FIMTokens            FIMTokensConfig `json:"fim_tokens"`
-	APIKey               string          `json:"api_key"`     // API key for hosted providers
-	APIKeyEnv            string          `json:"api_key_env"` // Environment variable name for API key
+	Type                 string  `json:"type"` // "sweep"
+	URL                  string  `json:"url"`
+	Temperature          float64 `json:"temperature"`
+	MaxTokens            int     `json:"max_tokens"` // Max tokens to generate (also drives input trimming)
+	TopK                 int     `json:"top_k"`
+	CompletionTimeout    int     `json:"completion_timeout"` // in milliseconds
+	MaxDiffHistoryTokens int     `json:"max_diff_history_tokens"`
+	APIKey               string  `json:"api_key"`     // API key for hosted providers
+	APIKeyEnv            string  `json:"api_key_env"` // Environment variable name for API key
 }
 
 // DebugConfig holds debug settings
@@ -66,9 +55,8 @@ type Config struct {
 // All config must come from the Lua client - no defaults are applied here.
 func (c *Config) Validate() error {
 	// Validate provider type
-	validProviders := map[string]bool{"inline": true, "fim": true, "sweep": true, "zeta": true}
-	if !validProviders[c.Provider.Type] {
-		return fmt.Errorf("invalid provider.type %q: must be one of inline, fim, sweep, zeta", c.Provider.Type)
+	if c.Provider.Type != "sweep" {
+		return fmt.Errorf("invalid provider.type %q: must be \"sweep\"", c.Provider.Type)
 	}
 
 	// Validate log level
@@ -92,22 +80,6 @@ func (c *Config) Validate() error {
 	}
 	if c.Provider.MaxDiffHistoryTokens < 0 {
 		return fmt.Errorf("invalid provider.max_diff_history_tokens %d: must be >= 0", c.Provider.MaxDiffHistoryTokens)
-	}
-
-	// Validate completion_path starts with /
-	if !strings.HasPrefix(c.Provider.CompletionPath, "/") {
-		return fmt.Errorf("invalid provider.completion_path %q: must start with /", c.Provider.CompletionPath)
-	}
-
-	// Validate fim_tokens fields are all non-empty
-	if c.Provider.FIMTokens.Prefix == "" {
-		return fmt.Errorf("invalid provider.fim_tokens.prefix: must be non-empty")
-	}
-	if c.Provider.FIMTokens.Suffix == "" {
-		return fmt.Errorf("invalid provider.fim_tokens.suffix: must be non-empty")
-	}
-	if c.Provider.FIMTokens.Middle == "" {
-		return fmt.Errorf("invalid provider.fim_tokens.middle: must be non-empty")
 	}
 
 	return nil

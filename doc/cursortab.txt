@@ -74,20 +74,15 @@ Full configuration with defaults: >lua
     },
 
     provider = {
-      type = "inline",              -- "inline", "fim", "sweep", "zeta"
-      url = "http://localhost:8000",
-      model = "",
+      type = "sweep",
+      url = "https://autocomplete.sweep.dev",
       temperature = 0.0,
       max_tokens = 512,
       top_k = 50,
       completion_timeout = 5000,    -- ms
       max_diff_history_tokens = 512,
-      completion_path = "/v1/completions",
-      fim_tokens = {
-        prefix = "<|fim_prefix|>",
-        suffix = "<|fim_suffix|>",
-        middle = "<|fim_middle|>",
-      },
+      api_key = nil,                -- API key (nil to use env var)
+      api_key_env = "SWEEP_AI_TOKEN",
     },
 
     debug = {
@@ -143,24 +138,17 @@ behavior.cursor_prediction            *cursortab-config-behavior-cursor-predicti
 PROVIDER OPTIONS                                    *cursortab-config-provider*
 
   `type`
-      Provider type: "inline", "fim", "sweep", or "zeta".
-      - inline: End-of-line completion, stops at newline
-      - fim: Fill-in-the-middle, multi-line with prefix/suffix context
-      - sweep: SweepAI Next-Edit model for multi-line edits
-      - zeta: Zed's Zeta model with cursor predictions
+      Provider type. Currently only "sweep" is supported.
+      Sweep is a hosted Next-Edit model for multi-line edits.
 
   `url`
-      URL of the provider server.
-
-  `model`
-      Model name to use.
+      URL of the Sweep API server (default: "https://autocomplete.sweep.dev").
 
   `temperature`
       Sampling temperature for generation.
 
   `max_tokens`
-      Maximum tokens to generate. For sweep/zeta providers, this also
-      determines the input context size (trimmed to fit within output budget).
+      Maximum tokens to generate.
 
   `top_k`
       Top-k sampling parameter.
@@ -171,20 +159,13 @@ PROVIDER OPTIONS                                    *cursortab-config-provider*
   `max_diff_history_tokens`
       Maximum tokens for diff history context. Set to 0 for no limit.
 
-  `completion_path`
-      API endpoint path for completions. Default: "/v1/completions".
-      Must start with "/". Override when using non-standard API endpoints.
+  `api_key`
+      API key for the Sweep service. If nil, uses the environment variable
+      specified by `api_key_env`.
 
-  `fim_tokens`                                 *cursortab-config-provider-fim*
-      FIM (Fill-in-the-Middle) tokens configuration. Only used by the FIM
-      provider. When nil, uses default tokens. Example: >lua
+  `api_key_env`
+      Environment variable name for the API key (default: "SWEEP_AI_TOKEN").
 
-        fim_tokens = {
-          prefix = "<|fim_prefix|>",   -- Token before prefix content
-          suffix = "<|fim_suffix|>",   -- Token before suffix content
-          middle = "<|fim_middle|>",   -- Token before completion
-        }
-<
 ------------------------------------------------------------------------------
 DEBUG OPTIONS                                          *cursortab-config-debug*
 
@@ -214,11 +195,9 @@ They will be automatically migrated to the new nested structure:
   `cursor_prediction`          behavior.cursor_prediction
   `provider`                   provider.type
   `provider_url`               provider.url
-  `provider_model`             provider.model
   `provider_temperature`       provider.temperature
   `provider_max_tokens`        provider.max_tokens
   `provider_top_k`             provider.top_k
-  `max_context_tokens`         provider.max_context_tokens
   `max_diff_history_tokens`    provider.max_diff_history_tokens
   `debug_immediate_shutdown`   debug.immediate_shutdown
 

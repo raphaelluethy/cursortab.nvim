@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -15,10 +16,7 @@ import (
 	"cursortab/buffer"
 	"cursortab/engine"
 	"cursortab/logger"
-	"cursortab/provider/fim"
-	"cursortab/provider/inline"
 	"cursortab/provider/sweep"
-	"cursortab/provider/zeta"
 	"cursortab/types"
 
 	"github.com/neovim/go-client/nvim"
@@ -41,35 +39,21 @@ type Daemon struct {
 func NewDaemon(config Config) (*Daemon, error) {
 	providerConfig := &types.ProviderConfig{
 		ProviderURL:         config.Provider.URL,
-		ProviderModel:       config.Provider.Model,
 		ProviderTemperature: config.Provider.Temperature,
 		ProviderMaxTokens:   config.Provider.MaxTokens,
 		ProviderTopK:        config.Provider.TopK,
-		CompletionPath:      config.Provider.CompletionPath,
 		APIKey:              config.Provider.APIKey,
 		APIKeyEnv:           config.Provider.APIKeyEnv,
-	}
-
-	providerConfig.FIMTokens = types.FIMTokenConfig{
-		Prefix: config.Provider.FIMTokens.Prefix,
-		Suffix: config.Provider.FIMTokens.Suffix,
-		Middle: config.Provider.FIMTokens.Middle,
 	}
 
 	var prov engine.Provider
 	var provErr error
 	switch types.ProviderType(config.Provider.Type) {
-	case types.ProviderTypeInline:
-		prov = inline.NewProvider(providerConfig)
-	case types.ProviderTypeFIM:
-		prov = fim.NewProvider(providerConfig)
 	case types.ProviderTypeSweep:
 		prov, provErr = sweep.NewProvider(providerConfig)
 		if provErr != nil {
 			return nil, fmt.Errorf("failed to create sweep provider: %w", provErr)
 		}
-	case types.ProviderTypeZeta:
-		prov = zeta.NewProvider(providerConfig)
 	default:
 		return nil, fmt.Errorf("unsupported provider type: %s", config.Provider.Type)
 	}
@@ -167,6 +151,9 @@ func (d *Daemon) acceptConnections() {
 	for {
 		conn, err := d.listener.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
 			select {
 			case <-d.ctx.Done():
 				return // Server is shutting down
@@ -258,10 +245,10 @@ func (d *Daemon) monitorIdleShutdown() {
 
 func (d *Daemon) Stop() {
 	d.engine.Stop()
+	d.cancel()
 	if d.listener != nil {
 		d.listener.Close()
 	}
-	d.cancel()
 }
 
 func (d *Daemon) cleanup() {
