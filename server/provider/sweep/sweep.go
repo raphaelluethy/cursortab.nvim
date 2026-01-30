@@ -287,9 +287,10 @@ func buildHostedPrompt(p *provider.Provider, ctx *provider.Context) *openai.Comp
 	}
 
 	// Calculate cursor position as byte offset
+	// Use ctx.CursorLine (relative to trimmed content), not req.CursorRow (absolute)
 	cursorPosition := 0
-	cursorLine := req.CursorRow - 1 // Convert to 0-indexed (CursorRow is 1-indexed)
-	cursorCol := req.CursorCol      // CursorCol is already 0-indexed
+	cursorLine := ctx.CursorLine // Already 0-indexed, relative to trimmed lines
+	cursorCol := req.CursorCol   // CursorCol is already 0-indexed
 
 	for i, line := range ctx.TrimmedLines {
 		if i < cursorLine {
