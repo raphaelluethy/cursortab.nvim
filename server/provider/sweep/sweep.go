@@ -459,63 +459,72 @@ func parseLocalCompletion(p *provider.Provider, ctx *provider.Context) (*types.C
 }
 
 func parseHostedCompletion(p *provider.Provider, ctx *provider.Context) (*types.CompletionResponse, bool) {
-	// The Sweep response contains completion text and start/end indices
-	// The indices are byte offsets in the file
+	// The Sweep API returns: completion (replacement text) + start_index/end_index (byte offsets)
+	// The byte offsets are relative to the trimmed content we sent (ctx.TrimmedLines)
+	//
+	// Strategy: Apply the byte replacement to get the full updated content,
+	// then use the same logic as parseLocalCompletion
 	completionText := ctx.Result.Text
-	if completionText == "" {
-		return p.EmptyResponse(), true
-	}
-
-	req := ctx.Request
-	fileContents := strings.Join(req.Lines, "\n")
-
-	// Get start and end indices from the result metadata
 	startIndex := ctx.Result.StartIndex
 	endIndex := ctx.Result.EndIndex
 
-	// If indices are not set, fall back to local parsing
-	if startIndex == 0 && endIndex == 0 {
-		return parseLocalCompletion(p, ctx)
+	// Build the content we sent to the API (trimmed content)
+	sentContent := strings.Join(ctx.TrimmedLines, "\n")
+
+	// If no indices provided, the completion IS the full updated content
+	// Otherwise, apply the replacement to get the full updated content
+	var updatedContent string
+	if startIndex == 0 && endIndex == 0 && completionText == "" {
+		// No change
+		return p.EmptyResponse(), true
+	} else if startIndex == 0 && endIndex == 0 {
+		// Completion is the full content (no byte offsets means full replacement)
+		updatedContent = completionText
+	} else {
+		// Apply byte replacement: sentContent[0:startIndex] + completionText + sentContent[endIndex:]
+		if startIndex > len(sentContent) {
+			startIndex = len(sentContent)
+		}
+		if endIndex > len(sentContent) {
+			endIndex = len(sentContent)
+		}
+		if startIndex > endIndex {
+			startIndex = endIndex
+		}
+		updatedContent = sentContent[:startIndex] + completionText + sentContent[endIndex:]
 	}
 
-	// Extract the old text being replaced
-	if startIndex > len(fileContents) {
-		startIndex = len(fileContents)
-	}
-	if endIndex > len(fileContents) {
-		endIndex = len(fileContents)
-	}
-	if startIndex > endIndex {
-		startIndex = endIndex
-	}
+	// Now use the same logic as parseLocalCompletion
+	updatedContent = strings.TrimRight(updatedContent, " \t\n\r")
 
-	oldText := fileContents[startIndex:endIndex]
-
-	// If the completion is the same as the old text, no change needed
-	if completionText == oldText {
+	req := ctx.Request
+	windowStart := ctx.WindowStart
+	windowEnd := ctx.WindowEnd
+	if windowStart < 0 {
+		windowStart = 0
+	}
+	if windowEnd > len(req.Lines) {
+		windowEnd = len(req.Lines)
+	}
+	if windowStart >= windowEnd || windowStart >= len(req.Lines) {
 		return p.EmptyResponse(), true
 	}
 
-	// Convert byte offsets to line numbers
-	startLine := 1
-	endLine := 1
-	byteCount := 0
-	for i, line := range req.Lines {
-		lineLen := len(line) + 1 // +1 for newline
-		if byteCount+lineLen > startIndex && startLine == 1 {
-			startLine = i + 1
-		}
-		if byteCount+lineLen >= endIndex {
-			endLine = i + 1
-			break
-		}
-		byteCount += lineLen
+	oldLines := req.Lines[windowStart:windowEnd]
+	oldText := strings.TrimRight(strings.Join(oldLines, "\n"), " \t\n\r")
+
+	if updatedContent == oldText {
+		return p.EmptyResponse(), true
 	}
 
-	// Build the new lines
-	newLines := strings.Split(completionText, "\n")
+	newLines := strings.Split(updatedContent, "\n")
 
-	return p.BuildCompletion(ctx, startLine, endLine, newLines)
+	endLineInc := ctx.EndLineInc
+	if endLineInc == 0 {
+		endLineInc = min(windowStart+len(newLines), windowEnd)
+	}
+
+	return p.BuildCompletion(ctx, windowStart+1, endLineInc, newLines)
 }
 
 func min(a, b int) int {
