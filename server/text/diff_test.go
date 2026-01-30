@@ -618,7 +618,7 @@ if __name__ == "__main__":
 	assert.Equal(t, ChangeAddition, change.Type, "line 12 is addition")
 }
 
-func TestIfCompletionBug(t *testing.T) {
+func TestPartialLineCompletionDetectedAsAppendChars(t *testing.T) {
 	oldText := `def bubble_sort(arr):
     n = len(arr)
     for i in range(n):
@@ -652,7 +652,7 @@ if __name__ == "__main__":
 	assert.Equal(t, "if ", change9.OldContent, "oldContent")
 }
 
-func TestSingleLineToMultipleLinesWithSpacesReproduceBug(t *testing.T) {
+func TestSingleLineToMultipleLinesWithTrailingNewlines(t *testing.T) {
 	oldText := "def test"
 	newText := `def test():
     print("test")
@@ -667,10 +667,6 @@ test()
 
 	assert.True(t, len(actual.Changes) >= 2, "at least 2 changes detected")
 }
-
-// =============================================================================
-// Tests for unequal line count scenarios (insertions/deletions)
-// =============================================================================
 
 func TestLineMapping_EqualLineCounts(t *testing.T) {
 	text1 := "line 1\nline 2\nline 3"
@@ -910,8 +906,7 @@ func TestLargeLineCountDrift(t *testing.T) {
 }
 
 func TestEmptyLineAddition(t *testing.T) {
-	// Reproduces bug: empty line additions were being dropped
-	// because addChange incorrectly rejected them when oldContent == newContent == ""
+	// Verifies empty line additions are properly detected and included
 	text1 := "import numpy as np"
 	text2 := "import numpy as np\n\ndef test_numpy():\n    print('test')"
 
@@ -970,7 +965,7 @@ func TestMultipleEmptyLineAdditions(t *testing.T) {
 }
 
 func TestTrailingEmptyLinePreserved(t *testing.T) {
-	// Reproduces bug: trailing empty line in original was being lost
+	// Verifies trailing empty line in original is preserved (not counted as change)
 	// Buffer has: ["import numpy as np", ""] (2 lines, line 2 is empty)
 	// Completion: ["import numpy as np", "", "def test():", "    pass"] (4 lines)
 	// Expected: lines 1-2 are EQUAL, lines 3-4 are additions
@@ -981,20 +976,13 @@ func TestTrailingEmptyLinePreserved(t *testing.T) {
 
 	actual := ComputeDiff(text1, text2)
 
-	// Debug: print what we got
-	t.Logf("OldLineCount: %d, NewLineCount: %d", actual.OldLineCount, actual.NewLineCount)
-	t.Logf("Changes count: %d", len(actual.Changes))
-	for lineNum, change := range actual.Changes {
-		t.Logf("  Line %d: Type=%v, Content=%q, NewLineNum=%d", lineNum, change.Type, change.Content, change.NewLineNum)
-	}
-
 	// Should only have 2 additions (def test and pass), NOT 3 (with spurious empty line)
 	assert.Equal(t, 2, len(actual.Changes), "should only have 2 additions (trailing empty line preserved)")
 
 	// Verify no empty line addition (the empty line already exists in original)
 	for _, change := range actual.Changes {
 		if change.Type == ChangeAddition && change.Content == "" {
-			t.Errorf("should not have empty line addition - the empty line already exists in original")
+			assert.True(t, false, "should not have empty line addition - the empty line already exists in original")
 		}
 	}
 }
@@ -1014,29 +1002,25 @@ func TestJoinLinesSplitLinesRoundTrip(t *testing.T) {
 	cases := [][]string{
 		{"a"},
 		{"a", "b"},
-		{"a", ""},        // trailing empty line
-		{"a", "", "b"},   // empty line in middle
-		{"", "a"},        // empty line at start
+		{"a", ""},      // trailing empty line
+		{"a", "", "b"}, // empty line in middle
+		{"", "a"},      // empty line at start
 		{"a", "b", "c"},
 	}
 
 	for _, lines := range cases {
 		text := JoinLines(lines)
 		result := splitLines(text)
-		if len(lines) != len(result) {
-			t.Errorf("round-trip failed for %v: got %v", lines, result)
-			continue
-		}
+		assert.Equal(t, len(lines), len(result), "round-trip length")
+
 		for i := range lines {
-			if lines[i] != result[i] {
-				t.Errorf("round-trip element mismatch at %d for %v: got %v", i, lines, result)
-			}
+			assert.Equal(t, lines[i], result[i], fmt.Sprintf("round-trip element mismatch at %d", i))
 		}
 	}
 }
 
 func TestPureAdditionsAtEndOfFile(t *testing.T) {
-	// Reproduces bug: empty lines between additions were being lost
+	// Verifies empty lines between additions are preserved
 	// Buffer has: ["import numpy as np", ""] (2 lines)
 	// Completion: ["import numpy as np", "", "def f1():", "    pass", "", "def f2():", "    pass"]
 	// Expected: lines 1-2 EQUAL, lines 3-7 ADDITIONS (5 additions, including empty line at 5)
@@ -1048,12 +1032,6 @@ func TestPureAdditionsAtEndOfFile(t *testing.T) {
 	text2 := JoinLines(newLines)
 
 	actual := ComputeDiff(text1, text2)
-
-	t.Logf("OldLineCount: %d, NewLineCount: %d", actual.OldLineCount, actual.NewLineCount)
-	t.Logf("Changes count: %d", len(actual.Changes))
-	for lineNum, change := range actual.Changes {
-		t.Logf("  Line %d: Type=%v, Content=%q", lineNum, change.Type, change.Content)
-	}
 
 	// Should have 5 additions (lines 3-7)
 	assert.Equal(t, 5, len(actual.Changes), "should have 5 additions")
@@ -1072,7 +1050,7 @@ func TestPureAdditionsAtEndOfFile(t *testing.T) {
 func TestEmptyLineFilledWithContent(t *testing.T) {
 	// Scenario: cursor is on empty line 8, inline completion suggests "def calc_angle(x, y"
 	// This should render as inline ghost text, not a new virtual line
-	text1 := JoinLines([]string{""})                      // empty line
+	text1 := JoinLines([]string{""})                    // empty line
 	text2 := JoinLines([]string{"def calc_angle(x, y"}) // filled with content
 
 	actual := ComputeDiff(text1, text2)
@@ -1092,4 +1070,165 @@ func TestEmptyLineFilledWithContent(t *testing.T) {
 	assert.Equal(t, 19, change.ColEnd, "ColEnd should be length of new content")
 	assert.Equal(t, "", change.OldContent, "OldContent should be empty")
 	assert.Equal(t, "def calc_angle(x, y", change.Content, "Content")
+}
+
+// TestDiffWithOnlyWhitespaceChanges tests detection of whitespace-only changes.
+func TestDiffWithOnlyWhitespaceChanges(t *testing.T) {
+	text1 := "line with trailing spaces   "
+	text2 := "line with trailing spaces"
+
+	actual := ComputeDiff(text1, text2)
+
+	// Should detect the whitespace difference
+	assert.True(t, len(actual.Changes) > 0, "should detect whitespace change")
+}
+
+// TestDiffWithIndentationChanges tests detection of indentation changes.
+func TestDiffWithIndentationChanges(t *testing.T) {
+	text1 := "    indented line"
+	text2 := "        double indented line"
+
+	actual := ComputeDiff(text1, text2)
+
+	assert.True(t, len(actual.Changes) > 0, "should detect indentation change")
+
+	change, exists := actual.Changes[1]
+	assert.True(t, exists, "change at line 1")
+	// Indentation + word change should result in modification or replace
+	assert.True(t, change.Type != ChangeAddition && change.Type != ChangeDeletion,
+		"should be modification-type change")
+}
+
+// TestDiffWithMixedLineEndings handles text that might have different concepts of lines.
+func TestDiffWithMixedLineEndings(t *testing.T) {
+	text1 := "line1\nline2\nline3"
+	text2 := "line1\nmodified\nline3"
+
+	actual := ComputeDiff(text1, text2)
+
+	assert.Equal(t, 1, len(actual.Changes), "should have 1 change")
+	_, exists := actual.Changes[2]
+	assert.True(t, exists, "change at line 2")
+}
+
+// TestDiffVeryLongFile tests diff computation on a large file.
+func TestDiffVeryLongFile(t *testing.T) {
+	// Create a large file
+	var lines1, lines2 []string
+	for i := 0; i < 500; i++ {
+		lines1 = append(lines1, fmt.Sprintf("line %d content here", i+1))
+		lines2 = append(lines2, fmt.Sprintf("line %d content here", i+1))
+	}
+	// Change a few lines in the middle
+	lines2[100] = "modified line 101"
+	lines2[200] = "modified line 201"
+	lines2[300] = "modified line 301"
+
+	text1 := JoinLines(lines1)
+	text2 := JoinLines(lines2)
+
+	actual := ComputeDiff(text1, text2)
+
+	// Should detect exactly 3 changes
+	assert.Equal(t, 3, len(actual.Changes), "should detect 3 changes in large file")
+}
+
+// TestDiffWithDuplicateLines tests diff when file has duplicate lines.
+func TestDiffWithDuplicateLines(t *testing.T) {
+	text1 := "duplicate\nduplicate\nduplicate\nunique"
+	text2 := "duplicate\nmodified\nduplicate\nunique"
+
+	actual := ComputeDiff(text1, text2)
+
+	// Should detect change at line 2 even though there are duplicates
+	assert.True(t, len(actual.Changes) > 0, "should detect change among duplicates")
+}
+
+// TestDiffConsecutiveEmptyLines tests handling of consecutive empty lines.
+func TestDiffConsecutiveEmptyLines(t *testing.T) {
+	text1 := "line1\n\n\nline4"
+	text2 := "line1\n\n\n\nline5"
+
+	actual := ComputeDiff(text1, text2)
+
+	// Should detect the differences
+	assert.True(t, len(actual.Changes) > 0, "should detect changes in empty line sequences")
+}
+
+// TestDiffSingleCharacterChanges tests detection of single character changes.
+func TestDiffSingleCharacterChanges(t *testing.T) {
+	tests := []struct {
+		name     string
+		old      string
+		new      string
+		expected ChangeType
+	}{
+		{"add single char at end", "hello", "hello!", ChangeAppendChars},
+		{"remove single char at end", "hello!", "hello", ChangeDeleteChars},
+		{"replace single char", "hello", "hallo", ChangeReplaceChars},
+		{"add single char at start", "ello", "hello", ChangeReplaceChars},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actual := ComputeDiff(tt.old, tt.new)
+			assert.Equal(t, 1, len(actual.Changes), "should have 1 change")
+			change, exists := actual.Changes[1]
+			assert.True(t, exists, "change exists")
+			assert.Equal(t, tt.expected, change.Type, "change type")
+		})
+	}
+}
+
+// TestDiffLineCount verifies OldLineCount and NewLineCount are accurate.
+func TestDiffLineCount(t *testing.T) {
+	tests := []struct {
+		name     string
+		old      string
+		new      string
+		oldCount int
+		newCount int
+	}{
+		{"single to single", "one", "one", 1, 1},
+		{"single to multi", "one", "one\ntwo", 1, 2},
+		{"multi to single", "one\ntwo", "combined", 2, 1},
+		{"empty to content", "", "content", 0, 1},
+		{"content to empty", "content", "", 1, 0},
+		{"multi to multi same", "a\nb\nc", "x\ny\nz", 3, 3},
+		{"add lines", "a\nb", "a\nb\nc\nd", 2, 4},
+		{"remove lines", "a\nb\nc\nd", "a\nd", 4, 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			actual := ComputeDiff(tt.old, tt.new)
+			assert.Equal(t, tt.oldCount, actual.OldLineCount, "OldLineCount")
+			assert.Equal(t, tt.newCount, actual.NewLineCount, "NewLineCount")
+		})
+	}
+}
+
+// TestDiffUnicodeContent tests diff with unicode characters.
+func TestDiffUnicodeContent(t *testing.T) {
+	text1 := "Hello 世界"
+	text2 := "Hello 世界!"
+
+	actual := ComputeDiff(text1, text2)
+
+	assert.Equal(t, 1, len(actual.Changes), "should have 1 change")
+	change, exists := actual.Changes[1]
+	assert.True(t, exists, "change exists")
+	assert.Equal(t, ChangeAppendChars, change.Type, "should be append_chars")
+}
+
+// TestDiffWithTabs tests diff handles tabs correctly.
+func TestDiffWithTabs(t *testing.T) {
+	text1 := "\tfirst\n\tsecond"
+	text2 := "\tfirst\n\tmodified"
+
+	actual := ComputeDiff(text1, text2)
+
+	assert.True(t, len(actual.Changes) > 0, "should detect change")
+	_, exists := actual.Changes[2]
+	assert.True(t, exists, "change at line 2")
 }

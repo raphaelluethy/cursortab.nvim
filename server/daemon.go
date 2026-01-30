@@ -84,9 +84,9 @@ func NewDaemon(config Config) (*Daemon, error) {
 		IdleCompletionDelay: time.Duration(config.Behavior.IdleCompletionDelay) * time.Millisecond,
 		TextChangeDebounce:  time.Duration(config.Behavior.TextChangeDebounce) * time.Millisecond,
 		CursorPrediction: engine.CursorPredictionConfig{
-			Enabled:       config.Behavior.CursorPrediction.Enabled,
-			AutoAdvance:   config.Behavior.CursorPrediction.AutoAdvance,
-			DistThreshold: config.Behavior.CursorPrediction.DistThreshold,
+			Enabled:            config.Behavior.CursorPrediction.Enabled,
+			AutoAdvance:        config.Behavior.CursorPrediction.AutoAdvance,
+			ProximityThreshold: config.Behavior.CursorPrediction.ProximityThreshold,
 		},
 		MaxDiffTokens: config.Provider.MaxDiffHistoryTokens,
 	}, engine.SystemClock)

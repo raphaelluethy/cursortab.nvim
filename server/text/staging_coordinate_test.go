@@ -6,10 +6,6 @@ import (
 	"testing"
 )
 
-// =============================================================================
-// Tests for coordinate mapping in staging
-// =============================================================================
-
 // TestStageCoordinates_ModificationHasCorrectMapping verifies that modifications
 // in a stage have correct coordinate mapping for rendering.
 func TestStageCoordinates_ModificationHasCorrectMapping(t *testing.T) {
@@ -116,8 +112,8 @@ func TestStageIncludesAllLinesFromDeleteInsertBlock(t *testing.T) {
 		diffResult,
 		1,    // cursorRow
 		0, 0, // no viewport (all visible)
-		1,    // baseLineOffset
-		3,    // proximityThreshold
+		1, // baseLineOffset
+		3, // proximityThreshold
 		"test.json",
 		newLines,
 		oldLines,
@@ -268,154 +264,94 @@ func TestBufferLineCalculation(t *testing.T) {
 
 // TestPureAdditionsAfterExistingContent verifies that when adding lines after
 // the end of existing content, BufferStart points to the first new line, not the anchor.
-// This reproduces the production bug where a file with 2 lines gets additions and
-// BufferStart is 2 (the anchor) instead of 3 (the insertion point).
 func TestPureAdditionsAfterExistingContent(t *testing.T) {
-	// Scenario: File has 2 lines, completion adds 8 more lines
-	// Old: ["import numpy as np", ""]
-	// New: ["import numpy as np", "", "def calculate_distance...", ...]
+	// File has 2 lines, completion adds 8 more lines
 	// Lines 1-2 unchanged, lines 3-10 are pure additions
-	oldLines := []string{"import numpy as np", ""}
+	oldLines := []string{"const x = 1;", ""}
 	newLines := []string{
-		"import numpy as np",
+		"const x = 1;",
 		"",
-		"def calculate_distance(x1, y1, x2, y2):",
-		"    return np.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)",
+		"func helper1() {}",
+		"func helper2() {}",
 		"",
-		"def calculate_angle(x1, y1, x2, y2):",
-		"    return np.arctan2(y2 - y1, x2 - x1)",
+		"func helper3() {}",
+		"func helper4() {}",
 		"",
-		"def calculate_distance_and_angle(x1, y1, x2, y2):",
-		"    distance = np.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)",
+		"func helper5() {}",
+		"func helper6() {}",
 	}
 
 	oldText := JoinLines(oldLines)
 	newText := JoinLines(newLines)
 	diff := ComputeDiff(oldText, newText)
 
-	// Verify the diff: lines 1-2 should be unchanged, lines 3-10 should be additions
-	t.Logf("OldLineCount: %d, NewLineCount: %d", diff.OldLineCount, diff.NewLineCount)
-	t.Logf("Changes count: %d", len(diff.Changes))
-	for k, v := range diff.Changes {
-		t.Logf("  Change[%d]: Type=%v, OldLineNum=%d, NewLineNum=%d", k, v.Type, v.OldLineNum, v.NewLineNum)
-	}
-
 	// Lines 3-10 should be additions
-	assert.True(t, len(diff.Changes) >= 8, fmt.Sprintf("Expected at least 8 changes (additions), got %d", len(diff.Changes)))
+	assert.True(t, len(diff.Changes) >= 8, fmt.Sprintf("Expected at least 8 changes, got %d", len(diff.Changes)))
 
-	// All changes should be additions anchored at old line 2
+	// All changes should be additions
 	for k, change := range diff.Changes {
 		assert.Equal(t, ChangeAddition, change.Type,
 			fmt.Sprintf("Change at key %d should be addition", k))
 	}
 
-	// Create stages
-	baseLineOffset := 1
-	result := CreateStages(
-		diff,
-		2,    // cursorRow (at the empty line)
-		0, 0, // no viewport
-		baseLineOffset,
-		3, // proximityThreshold
-		"test.py",
-		newLines,
-		oldLines,
-	)
+	result := CreateStages(diff, 2, 0, 0, 1, 3, "test.go", newLines, oldLines)
 
 	assert.NotNil(t, result, "result should not be nil")
 	assert.True(t, len(result.Stages) >= 1, "should have at least 1 stage")
 
 	stage := result.Stages[0]
-	t.Logf("Stage: BufferStart=%d, BufferEnd=%d, Lines=%d", stage.BufferStart, stage.BufferEnd, len(stage.Lines))
 
-	// KEY ASSERTION: BufferStart should be 3 (first new line), not 2 (anchor line)
-	// The additions are inserted AFTER line 2, so they appear starting at line 3
+	// BufferStart should be 3 (first new line), not 2 (anchor line)
 	assert.Equal(t, 3, stage.BufferStart,
-		fmt.Sprintf("BufferStart should be 3 (insertion point), got %d (anchor)", stage.BufferStart))
+		fmt.Sprintf("BufferStart should be 3 (insertion point), got %d", stage.BufferStart))
 
-	// BufferEnd should also be reasonable (at least 3 for pure additions)
+	// BufferEnd should be >= BufferStart
 	assert.True(t, stage.BufferEnd >= stage.BufferStart,
 		fmt.Sprintf("BufferEnd (%d) should be >= BufferStart (%d)", stage.BufferEnd, stage.BufferStart))
 }
 
 // TestMixedDeletionAndAdditions verifies correct staging when old content has a
 // leading line that's deleted while new lines are added at the end.
-// This reproduces a production bug where completion.Lines was trimmed of leading
-// newlines but buffer content still had them.
 func TestMixedDeletionAndAdditions(t *testing.T) {
-	// Scenario: Old has leading empty line, new does not (trimmed by provider)
-	// Old lines 43-46: ["", "// Initialize...", "const...", ""]
-	// New lines: ["// Initialize...", "const...", "", "// Global...", "application.use...", ""]
-	oldLines := []string{"", "// Initialize Hono app", "const app = new Hono()", ""}
-	newLines := []string{"// Initialize Hono app", "const app = new Hono()", "", "// Global middleware", "app.use(cors)", ""}
+	// Old has leading empty line, new does not (trimmed)
+	oldLines := []string{"", "// Comment", "const x = 1;", ""}
+	newLines := []string{"// Comment", "const x = 1;", "", "// New section", "const y = 2;", ""}
 
 	oldText := JoinLines(oldLines)
 	newText := JoinLines(newLines)
 	diff := ComputeDiff(oldText, newText)
 
-	t.Logf("OldLineCount: %d, NewLineCount: %d", diff.OldLineCount, diff.NewLineCount)
-	t.Logf("Changes count: %d", len(diff.Changes))
-	for k, v := range diff.Changes {
-		t.Logf("  Change[%d]: Type=%v, OldLineNum=%d, NewLineNum=%d, Content=%q, OldContent=%q",
-			k, v.Type, v.OldLineNum, v.NewLineNum, v.Content, v.OldContent)
-	}
-
-	// We should have:
-	// - 1 deletion (the leading empty line)
-	// - 3 additions (lines 4-6)
 	assert.True(t, len(diff.Changes) >= 1, fmt.Sprintf("Expected at least 1 change, got %d", len(diff.Changes)))
 
-	// Create stages
-	baseLineOffset := 43
-	result := CreateStages(
-		diff,
-		43,   // cursorRow
-		1, 100, // viewport
-		baseLineOffset,
-		3, // proximityThreshold
-		"test.ts",
-		newLines,
-		oldLines,
-	)
+	result := CreateStages(diff, 1, 1, 100, 1, 3, "test.go", newLines, oldLines)
 
 	assert.NotNil(t, result, "result should not be nil")
 	assert.True(t, len(result.Stages) >= 1, "should have at least 1 stage")
 
 	stage := result.Stages[0]
-	t.Logf("Stage: BufferStart=%d, BufferEnd=%d, Lines=%d", stage.BufferStart, stage.BufferEnd, len(stage.Lines))
-	t.Logf("Stage Lines: %v", stage.Lines)
-	for i, g := range stage.Groups {
-		t.Logf("  Group[%d]: Type=%s, StartLine=%d, EndLine=%d, Lines=%v", i, g.Type, g.StartLine, g.EndLine, g.Lines)
-	}
 
 	// The stage should include ALL changed lines, not just 1
-	// Since we have deletion + additions, the stage should cover the full range
 	assert.True(t, len(stage.Lines) >= 3,
 		fmt.Sprintf("Stage should have at least 3 lines for meaningful changes, got %d", len(stage.Lines)))
 
-	// BufferStart should be 43 (where the deletion is)
-	assert.Equal(t, 43, stage.BufferStart,
-		fmt.Sprintf("BufferStart should be 43, got %d", stage.BufferStart))
+	// BufferStart should be 1 (where the deletion is, with baseLineOffset=1)
+	assert.Equal(t, 1, stage.BufferStart,
+		fmt.Sprintf("BufferStart should be 1, got %d", stage.BufferStart))
 }
 
 // TestShortBufferDiffComputation tests what happens when the buffer has fewer
-// lines than expected by the completion range. This can happen if the buffer
-// was not fully synced or if there's a race condition.
+// lines than expected by the completion range.
 func TestShortBufferDiffComputation(t *testing.T) {
-	// Scenario: Completion says StartLine=43, EndLineInc=46 (4 lines expected)
-	// But buffer extraction only gets 1 line (buffer has 43 lines total)
-	// This simulates what happens in processCompletion when buffer is shorter
-
 	// Old: 1 line (buffer only had this much)
-	oldLines := []string{"// Initialize Hono app with types"}
+	oldLines := []string{"// Comment"}
 
-	// New: 6 lines from completion (the model's output)
+	// New: 6 lines from completion
 	newLines := []string{
-		"// Initialize Hono app with types",
-		"const application = new Hono<ApiContext>();",
+		"// Comment",
+		"const x = 1;",
 		"",
-		"// Global middleware",
-		"application.use(\"*\", corsMiddleware);",
+		"// Section",
+		"const y = 2;",
 		"",
 	}
 
@@ -423,16 +359,7 @@ func TestShortBufferDiffComputation(t *testing.T) {
 	newText := JoinLines(newLines)
 	diff := ComputeDiff(oldText, newText)
 
-	t.Logf("OldLineCount: %d, NewLineCount: %d", diff.OldLineCount, diff.NewLineCount)
-	t.Logf("Changes count: %d", len(diff.Changes))
-	for k, v := range diff.Changes {
-		t.Logf("  Change[%d]: Type=%v, OldLineNum=%d, NewLineNum=%d, Content=%q",
-			k, v.Type, v.OldLineNum, v.NewLineNum, v.Content)
-	}
-
-	// The diff should detect that new lines 2-6 are additions
-	// Old line 1 = New line 1 (equal)
-	// New lines 2-6 are additions
+	// The diff should detect additions (lines 2-6)
 	assert.True(t, len(diff.Changes) >= 5,
 		fmt.Sprintf("Expected at least 5 changes (additions), got %d", len(diff.Changes)))
 
@@ -440,7 +367,7 @@ func TestShortBufferDiffComputation(t *testing.T) {
 	baseLineOffset := 43
 	result := CreateStages(
 		diff,
-		43,   // cursorRow
+		43,     // cursorRow
 		1, 100, // viewport
 		baseLineOffset,
 		3, // proximityThreshold
@@ -453,8 +380,6 @@ func TestShortBufferDiffComputation(t *testing.T) {
 	assert.True(t, len(result.Stages) >= 1, "should have at least 1 stage")
 
 	stage := result.Stages[0]
-	t.Logf("Stage: BufferStart=%d, BufferEnd=%d, Lines=%d", stage.BufferStart, stage.BufferEnd, len(stage.Lines))
-	t.Logf("Stage Lines: %v", stage.Lines)
 
 	// The stage should have all 5 additions
 	assert.True(t, len(stage.Lines) >= 5,
@@ -485,13 +410,6 @@ func TestEmptyOldContent(t *testing.T) {
 	newText := JoinLines(newLines)
 	diff := ComputeDiff(oldText, newText)
 
-	t.Logf("OldLineCount: %d, NewLineCount: %d", diff.OldLineCount, diff.NewLineCount)
-	t.Logf("Changes count: %d", len(diff.Changes))
-	for k, v := range diff.Changes {
-		t.Logf("  Change[%d]: Type=%v, OldLineNum=%d, NewLineNum=%d, Content=%q",
-			k, v.Type, v.OldLineNum, v.NewLineNum, v.Content)
-	}
-
 	// All 6 new lines should be additions
 	assert.Equal(t, 6, len(diff.Changes), "All 6 lines should be additions")
 
@@ -509,14 +427,8 @@ func TestEmptyOldContent(t *testing.T) {
 	)
 
 	if result == nil {
-		t.Logf("result is nil - staging returned no stages for empty old content")
+		// Staging may return nil for empty old content
 		return
-	}
-
-	for i, stage := range result.Stages {
-		t.Logf("Stage[%d]: BufferStart=%d, BufferEnd=%d, Lines=%d",
-			i, stage.BufferStart, stage.BufferEnd, len(stage.Lines))
-		t.Logf("  Stage Lines: %v", stage.Lines)
 	}
 
 	// All additions should be in a single stage
@@ -530,32 +442,24 @@ func TestEmptyOldContent(t *testing.T) {
 	assert.Equal(t, 6, totalLines, "Total lines should be 6")
 }
 
-// TestExactProductionScenarioTypeScript reproduces the exact scenario from the
-// production log where a TypeScript file modification resulted in only 1 line
-// being sent to Lua instead of the expected multiple lines.
-func TestExactProductionScenarioTypeScript(t *testing.T) {
-	// From production log:
-	// - Window was 43-50 (8 lines)
-	// - After truncation: replacing lines 43-46 (4 lines) with 6 new lines
-	// - But only 1 line was sent to Lua
-
-	// The original buffer lines 43-46:
-	// The sweep prompt shows the content starts with blank line after file_sep marker
+// TestLeadingEmptyLineDeletion tests staging when old content has a leading
+// empty line that gets deleted while additions occur.
+func TestLeadingEmptyLineDeletion(t *testing.T) {
+	// Original has leading blank line that gets trimmed in completion
 	oldLines := []string{
-		"",                              // blank line (after <|file_sep|>original/... marker)
-		"// Initialize Hono app with types",
-		"const application = new Hono<ApiContext>();",
+		"", // leading blank line
+		"// Comment",
+		"const x = 1;",
 		"",
 	}
 
-	// The completion (after TrimLeft which removed leading newline):
-	// 6 lines as stated in the log
+	// Completion with leading newline removed, plus additions
 	newLines := []string{
-		"// Initialize Hono app with types",
-		"const application = new Hono<ApiContext>();",
+		"// Comment",
+		"const x = 1;",
 		"",
-		"// Global middleware",
-		"application.use(\"*\", corsMiddleware);",
+		"// New section",
+		"const y = 2;",
 		"",
 	}
 
@@ -563,45 +467,23 @@ func TestExactProductionScenarioTypeScript(t *testing.T) {
 	newText := JoinLines(newLines)
 	diff := ComputeDiff(oldText, newText)
 
-	t.Logf("OldLineCount: %d, NewLineCount: %d", diff.OldLineCount, diff.NewLineCount)
-	t.Logf("Changes count: %d", len(diff.Changes))
-	for k, v := range diff.Changes {
-		t.Logf("  Change[%d]: Type=%v, OldLineNum=%d, NewLineNum=%d, Content=%q, OldContent=%q",
-			k, v.Type, v.OldLineNum, v.NewLineNum, v.Content, v.OldContent)
-	}
-
-	// Expected changes:
-	// - Deletion of old line 1 (empty line)
-	// - Old lines 2-4 map to new lines 1-3 (equal)
-	// - New lines 4-6 are additions
-
 	// Create stages
-	baseLineOffset := 43
 	result := CreateStages(
 		diff,
-		47,     // cursorRow (somewhere in the file, not at the change)
+		5,      // cursorRow
 		1, 100, // viewport
-		baseLineOffset,
+		1, // baseLineOffset
 		3, // proximityThreshold
-		"apps/api/src/index.ts",
+		"test.go",
 		newLines,
 		oldLines,
 	)
 
 	if result == nil {
-		t.Fatal("result should not be nil")
+		assert.NotNil(t, result, "staging result should not be nil")
+		return
 	}
 	assert.True(t, len(result.Stages) >= 1, "should have at least 1 stage")
-
-	// Log all stages
-	for i, stage := range result.Stages {
-		t.Logf("Stage[%d]: BufferStart=%d, BufferEnd=%d, Lines=%d",
-			i, stage.BufferStart, stage.BufferEnd, len(stage.Lines))
-		t.Logf("  Stage Lines: %v", stage.Lines)
-		for j, g := range stage.Groups {
-			t.Logf("  Group[%d]: Type=%s, StartLine=%d, EndLine=%d", j, g.Type, g.StartLine, g.EndLine)
-		}
-	}
 
 	// The total lines across all stages should be more than 1
 	totalLines := 0

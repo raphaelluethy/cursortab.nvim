@@ -20,24 +20,6 @@ const (
 	prefetchReady
 )
 
-// String returns a human-readable name for the prefetch state
-func (s prefetchState) String() string {
-	switch s {
-	case prefetchNone:
-		return "None"
-	case prefetchInFlight:
-		return "InFlight"
-	case prefetchWaitingForTab:
-		return "WaitingForTab"
-	case prefetchWaitingForCursorPrediction:
-		return "WaitingForCursorPrediction"
-	case prefetchReady:
-		return "Ready"
-	default:
-		return "Unknown"
-	}
-}
-
 // requestPrefetch requests a completion for a specific cursor position without changing the engine state
 func (e *Engine) requestPrefetch(source types.CompletionSource, overrideRow int, overrideCol int) {
 	if e.stopped {
@@ -127,7 +109,7 @@ func (e *Engine) handlePrefetchReady(resp *types.CompletionResponse) {
 
 			if targetLine > 0 {
 				distance := abs(targetLine - e.buffer.Row())
-				if distance <= e.config.CursorPrediction.DistThreshold {
+				if distance <= e.config.CursorPrediction.ProximityThreshold {
 					// Close enough - show completion immediately
 					e.tryShowPrefetchedCompletion()
 				} else {
@@ -167,12 +149,8 @@ func (e *Engine) tryShowPrefetchedCompletion() bool {
 
 // handlePrefetchError processes a prefetch error
 func (e *Engine) handlePrefetchError(err error) {
-	if err != nil && errors.Is(err, context.Canceled) {
-		logger.Debug("prefetch canceled: %v", err)
-	} else if err != nil {
+	if err != nil && !errors.Is(err, context.Canceled) {
 		logger.Error("prefetch error: %v", err)
-	} else {
-		logger.Debug("prefetch error: nil")
 	}
 	previousPrefetchState := e.prefetchState
 	e.prefetchState = prefetchNone

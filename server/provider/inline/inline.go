@@ -10,10 +10,10 @@ import (
 // NewProvider creates a new inline completion provider
 func NewProvider(config *types.ProviderConfig) *provider.Provider {
 	return &provider.Provider{
-		Name:      "inline",
-		Config:    config,
-		Client:    openai.NewClient(config.ProviderURL, config.CompletionPath),
-		Streaming: false,
+		Name:          "inline",
+		Config:        config,
+		Client:        openai.NewClient(config.ProviderURL, config.CompletionPath),
+		StreamingType: provider.StreamingTokens, // Token-by-token streaming for ghost text
 		Preprocessors: []provider.Preprocessor{
 			provider.SkipIfTextAfterCursor(),
 			provider.TrimContent(),
@@ -24,6 +24,7 @@ func NewProvider(config *types.ProviderConfig) *provider.Provider {
 			provider.RejectTruncated(),
 			parseCompletion,
 		},
+		StopTokens: []string{"\n"},
 	}
 }
 

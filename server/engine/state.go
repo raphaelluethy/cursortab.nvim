@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"cursortab/logger"
 	"cursortab/types"
 )
 
@@ -16,6 +15,8 @@ func (s state) String() string {
 		return "HasCompletion"
 	case stateHasCursorTarget:
 		return "HasCursorTarget"
+	case stateStreamingCompletion:
+		return "StreamingCompletion"
 	default:
 		return "Unknown"
 	}
@@ -82,6 +83,12 @@ var transitions = []Transition{
 	{stateHasCursorTarget, EventTextChanged, (*Engine).doRejectAndDebounce},
 	{stateHasCursorTarget, EventInsertLeave, (*Engine).doRejectAndStartIdleTimer},
 	{stateHasCursorTarget, EventCursorMovedNormal, (*Engine).doResetIdleTimer},
+
+	// From stateStreamingCompletion
+	{stateStreamingCompletion, EventEsc, (*Engine).doRejectStreaming},
+	{stateStreamingCompletion, EventTextChanged, (*Engine).doRejectStreamingAndDebounce},
+	{stateStreamingCompletion, EventInsertLeave, (*Engine).doRejectStreamingAndStartIdleTimer},
+	{stateStreamingCompletion, EventCursorMovedNormal, (*Engine).doResetIdleTimer},
 }
 
 // transitionMap provides O(1) lookup for transitions by (state, event) pair
@@ -114,7 +121,6 @@ func findTransition(from state, event EventType) *Transition {
 func (e *Engine) dispatch(event Event) bool {
 	t := findTransition(e.state, event.Type)
 	if t == nil {
-		logger.Debug("no handler: state=%s event=%s", e.state, event.Type)
 		return false
 	}
 	if t.Action != nil {
@@ -201,4 +207,77 @@ func (e *Engine) doAcceptCursorTarget(event Event) {
 func (e *Engine) doTextChangeWithCompletion(event Event) {
 	e.handleTextChangeImpl()
 	// Note: handleTextChangeImpl handles state transitions internally
+}
+
+// Streaming state action functions
+
+func (e *Engine) doRejectStreaming(event Event) {
+	e.cancelStreaming()
+	e.reject()
+	e.stopIdleTimer()
+}
+
+func (e *Engine) doRejectStreamingAndDebounce(event Event) {
+	// For token streaming with partial results, check if typing matches
+	if e.tokenStreamingState != nil && len(e.completions) > 0 {
+		// Cancel the stream but preserve the partial completion state
+		e.cancelTokenStreamingKeepPartial()
+
+		// Check if the typed text matches the partial completion
+		e.syncBuffer()
+		matches, hasRemaining := e.checkTypingMatchesPrediction()
+		if matches {
+			if hasRemaining {
+				// Typing matches - keep completion state
+				e.state = stateHasCompletion
+				return
+			}
+			// User typed everything
+			e.clearAll()
+			e.state = stateIdle
+			e.startTextChangeTimer()
+			return
+		}
+		// Doesn't match - reject
+		e.reject()
+		e.startTextChangeTimer()
+		return
+	}
+
+	// For line streaming with partial results (first stage rendered), check if typing matches
+	if e.streamingState != nil && len(e.completions) > 0 {
+		// Cancel the stream but preserve the partial completion state
+		e.cancelLineStreamingKeepPartial()
+
+		// Check if the typed text matches the partial completion
+		e.syncBuffer()
+		matches, hasRemaining := e.checkTypingMatchesPrediction()
+		if matches {
+			if hasRemaining {
+				// Typing matches - keep completion state
+				e.state = stateHasCompletion
+				return
+			}
+			// User typed everything
+			e.clearAll()
+			e.state = stateIdle
+			e.startTextChangeTimer()
+			return
+		}
+		// Doesn't match - reject
+		e.reject()
+		e.startTextChangeTimer()
+		return
+	}
+
+	// No partial results - reject everything
+	e.cancelStreaming()
+	e.reject()
+	e.startTextChangeTimer()
+}
+
+func (e *Engine) doRejectStreamingAndStartIdleTimer(event Event) {
+	e.cancelStreaming()
+	e.reject()
+	e.startIdleTimer()
 }
